@@ -4,6 +4,7 @@ import CoreGraphics
 import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let isBackgroundLaunch = CommandLine.arguments.contains("--background")
     private let repository = WindowRepository()
     private var configuredShortcut: SwitcherShortcut {
         SwitcherShortcut(storageValue: UserDefaults.standard.string(forKey: "customShortcut") ?? "") ?? .defaultShortcut
@@ -44,7 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureMainMenu()
         configureStatusItem()
         ensureLaunchAtLoginEnabled()
-        requestAccessibilityPermission()
+        if isBackgroundLaunch {
+            _ = AXIsProcessTrusted()
+        } else {
+            requestAccessibilityPermission()
+        }
         repository.warmTitleCache()
         ensureMonitorStarted()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -53,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         titleRefreshTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
             self?.repository.warmTitleCache()
         }
-        showSettings()
+        if !isBackgroundLaunch {
+            showSettings()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -88,13 +95,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func ensureLaunchAtLoginEnabled() {
+        // The explicit launch agent passes --background, which lets WarpTab
+        // start without creating a window or Dock icon. The main-app login
+        // item cannot pass that launch mode, so remove it to avoid duplicate
+        // or visible launches at sign-in.
         let loginItem = SMAppService.mainApp
-        guard loginItem.status != .enabled else { return }
+        if loginItem.status == .enabled {
+            do {
+                try loginItem.unregister()
+            } catch {
+                NSLog("WarpTab could not replace its visible login item: \(error.localizedDescription)")
+            }
+        }
+
+        installLaunchAgentFallback()
+    }
+
+    private func installLaunchAgentFallback() {
+        let bundlePath = Bundle.main.bundlePath
+        guard bundlePath.hasPrefix("/Applications/") else { return }
+
+        let fileManager = FileManager.default
+        let launchAgents = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        let agentURL = launchAgents.appendingPathComponent("com.warptab.launch-at-login.plist")
+        let configuration: [String: Any] = [
+            "Label": "com.warptab.launch-at-login",
+            "ProgramArguments": ["/usr/bin/open", "-g", bundlePath, "--args", "--background"],
+            "RunAtLoad": true,
+            "ProcessType": "Interactive"
+        ]
 
         do {
-            try loginItem.register()
+            try fileManager.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+            let data = try PropertyListSerialization.data(
+                fromPropertyList: configuration,
+                format: .xml,
+                options: 0
+            )
+            if (try? Data(contentsOf: agentURL)) != data {
+                try data.write(to: agentURL, options: .atomic)
+            }
         } catch {
-            NSLog("WarpTab could not enable launch at login: \(error.localizedDescription)")
+            NSLog("WarpTab could not install its launch-at-login fallback: \(error.localizedDescription)")
         }
     }
 

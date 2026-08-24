@@ -40,6 +40,24 @@ A quick <kbd>⌥</kbd> <kbd>Tab</kbd> press switches directly to the next window
 - Screen Recording permission only when using Thumbnail view
 - Swift 6 / Xcode Command Line Tools when building from source
 
+## Install with Homebrew
+
+WarpTab is available from this repository as a Homebrew Cask for Apple Silicon Macs:
+
+```sh
+brew tap adityav0hra/warptab https://github.com/adityav0hra/WarpTab.git
+brew install --cask adityav0hra/warptab/warptab
+open /Applications/WarpTab.app
+```
+
+Upgrade to the latest published version with:
+
+```sh
+brew upgrade --cask adityav0hra/warptab/warptab
+```
+
+The first launch is required to grant Accessibility permission and configure automatic background startup.
+
 ## Build from source
 
 Clone the repository and run the included app-bundle script:
