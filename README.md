@@ -1,25 +1,93 @@
-# WarpTab
+<div align="center">
+  <img src="Resources/WarpTab.png" width="128" alt="WarpTab app icon">
+  <h1>WarpTab</h1>
+  <p><strong>A fast, native window switcher for macOS.</strong></p>
+  <p>Switch between individual windows—not just applications.</p>
+</div>
 
-A lightweight, native macOS window switcher with a full settings app. Unlike the built-in app switcher, WarpTab shows every open window as a separate choice—even multiple windows from the same app.
+## Why WarpTab?
 
-## Features
+macOS shows one entry per application in its built-in <kbd>⌘</kbd> <kbd>Tab</kbd> switcher. If Safari, Finder, or another app has several windows open, reaching the one you want takes extra steps.
 
-- Separate entries for every standard app window
-- Native macOS translucent panel and app icons
-- Reliable `⌥ Tab` global shortcut from the app or menu-bar icon
-- Hold `⌥`, tap Tab repeatedly to choose, and release `⌥` to switch
-- Restores minimized windows when selected
-- Full app window for enabling the switcher, choosing a shortcut, and checking permissions
-- Menu-bar access, with a Dock icon while settings are open
+WarpTab gives every window its own entry in a compact, native macOS switcher. The default shortcut is <kbd>⌥</kbd> <kbd>Tab</kbd>, and it can be changed from the app.
 
-## Build and run
+## Highlights
+
+- **Every window is visible** — multiple windows from the same app appear separately.
+- **Two layouts** — choose a compact List or a Windows-style Thumbnail grid.
+- **Minimized windows included** — select one to restore and focus it.
+- **Custom global shortcut** — record the key and modifier combination you prefer.
+- **Keyboard-first interaction** — hold the modifier, press the shortcut key to cycle, and release to switch.
+- **Click-only pointer selection** — click a window to select it; merely hovering never changes the selection.
+- **Native macOS utility** — AppKit interface, menu-bar access, launch at login, and a compact settings window.
+- **Local and lightweight** — no accounts, analytics, or network services.
+
+## How it works
+
+With the default shortcut:
+
+1. Hold <kbd>⌥ Option</kbd> and press <kbd>Tab</kbd>. WarpTab appears immediately with the next window selected.
+2. Keep holding <kbd>⌥ Option</kbd> and press <kbd>Tab</kbd> again to move through the list.
+3. Release <kbd>Tab</kbd> once, then press and hold it to cycle continuously.
+4. Release <kbd>⌥ Option</kbd> to open the selected window.
+
+A quick <kbd>⌥</kbd> <kbd>Tab</kbd> press switches directly to the next window. You can also click any visible List row or Thumbnail card to select it before releasing the modifier.
+
+## Requirements
+
+- macOS 13 Ventura or later
+- Accessibility permission for discovering and focusing windows
+- Screen Recording permission only when using Thumbnail view
+- Swift 6 / Xcode Command Line Tools when building from source
+
+## Build from source
+
+Clone the repository and run the included app-bundle script:
 
 ```sh
-chmod +x scripts/build-app.sh
+git clone https://github.com/adityav0hra/WarpTab.git
+cd WarpTab
 ./scripts/build-app.sh
 open dist/WarpTab.app
 ```
 
-On first launch, allow WarpTab under **System Settings → Privacy & Security → Accessibility**. The `⌥ Tab` shortcut itself does not require Input Monitoring. WarpTab automatically detects newly granted permission and shows a green **Active** status when ready.
+The script creates an ad-hoc signed app at `dist/WarpTab.app`. To keep it in Applications:
 
-Because this local build is ad-hoc signed rather than notarized, macOS may ask you to confirm opening it. This prototype is intended for direct local installation, not Mac App Store distribution.
+```sh
+ditto dist/WarpTab.app /Applications/WarpTab.app
+open /Applications/WarpTab.app
+```
+
+Because local builds are not notarized, macOS may ask you to confirm the first launch.
+
+## Permissions
+
+On first launch, grant WarpTab access in:
+
+**System Settings → Privacy & Security → Accessibility**
+
+WarpTab detects the permission automatically and displays **Active** when window switching is ready. Thumbnail view may additionally prompt for Screen Recording access so it can render window previews.
+
+## Settings
+
+The WarpTab app lets you:
+
+- Enable or disable global window switching
+- Record a custom shortcut
+- Switch between List and Thumbnail layouts
+- Review Accessibility status and open System Settings
+
+Closing the settings window removes WarpTab from the Dock while it continues running from the menu bar. WarpTab also registers itself to launch when you sign in; choosing **Quit WarpTab** stops the current session.
+
+## Project structure
+
+```text
+Sources/WarpTab/     AppKit application and window-switching logic
+Resources/           App metadata and icon assets
+scripts/build-app.sh Release build and app-bundle script
+Package.swift        Swift Package Manager configuration
+```
+
+## Contributing
+
+Bug reports and focused pull requests are welcome. When changing shortcut or window-focus behavior, please verify first press, repeated cycling, modifier release, minimized windows, and both visual layouts.
