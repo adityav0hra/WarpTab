@@ -145,6 +145,9 @@ private func testPreferences() throws {
     try expect(preferences.searchEnabled, "Search default")
     try expect(preferences.previewsEnabled, "Preview default")
     try expect(preferences.dockPreviewsEnabled, "Dock preview default")
+    try expect(preferences.dockPreviewCloseEnabled, "Dock close-button default")
+    try expect(!preferences.quitAppWhenLastWindowClosed, "Quit-after-last-window default")
+    try expect(preferences.dockPreviewSize == .default, "Dock preview size default")
     try expect(preferences.showMinimized, "Minimized default")
     try expect(preferences.showHiddenApplications, "Hidden default")
     try expect(preferences.showFullscreen, "Fullscreen default")
@@ -155,13 +158,19 @@ private func testPreferences() throws {
     preferences.onChange = { changes += 1 }
     preferences.showHiddenApplications = false
     preferences.dockPreviewsEnabled = false
+    preferences.dockPreviewCloseEnabled = false
+    preferences.quitAppWhenLastWindowClosed = true
+    preferences.dockPreviewSize = .small
     preferences.displayScope = .currentDisplay
     preferences.excludedBundleIdentifiers = ["test.excluded"]
     try expect(!preferences.showHiddenApplications, "Preference persistence")
     try expect(!preferences.dockPreviewsEnabled, "Dock preview preference persistence")
+    try expect(!preferences.dockPreviewCloseEnabled, "Dock close-button preference persistence")
+    try expect(preferences.quitAppWhenLastWindowClosed, "Quit-after-last-window preference persistence")
+    try expect(preferences.dockPreviewSize == .small, "Dock preview size persistence")
     try expect(preferences.displayScope == .currentDisplay, "Display preference persistence")
     try expect(preferences.excludedBundleIdentifiers == ["test.excluded"], "Exclusion persistence")
-    try expect(changes == 4, "Preference change notifications")
+    try expect(changes == 7, "Preference change notifications")
 }
 
 private func testNativeTabSafety() throws {

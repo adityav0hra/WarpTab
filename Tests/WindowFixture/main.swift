@@ -5,6 +5,14 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
+        if CommandLine.arguments.contains("--single-window") {
+            let window = makeWindow(title: "WarpTab Single Window", origin: NSPoint(x: 220, y: 420))
+            window.tabbingMode = .disallowed
+            windows = [window]
+            window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
         if let stressIndex = CommandLine.arguments.firstIndex(of: "--stress"),
            CommandLine.arguments.indices.contains(stressIndex + 1),
            let count = Int(CommandLine.arguments[stressIndex + 1]), count > 0 {

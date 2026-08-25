@@ -8,6 +8,14 @@ final class WindowOptionsController: NSWindowController {
     private let searchSwitch = NSSwitch()
     private let previewsSwitch = NSSwitch()
     private let dockPreviewsSwitch = NSSwitch()
+    private let dockCloseSwitch = NSSwitch()
+    private let quitLastWindowSwitch = NSSwitch()
+    private let dockPreviewSizeControl = NSSegmentedControl(
+        labels: DockPreviewSize.allCases.map(\.displayName),
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
     private let minimizedSwitch = NSSwitch()
     private let hiddenSwitch = NSSwitch()
     private let fullscreenSwitch = NSSwitch()
@@ -51,11 +59,17 @@ final class WindowOptionsController: NSWindowController {
         configureSwitch(searchSwitch, action: #selector(changeSearch))
         configureSwitch(previewsSwitch, action: #selector(changePreviews))
         configureSwitch(dockPreviewsSwitch, action: #selector(changeDockPreviews))
+        configureSwitch(dockCloseSwitch, action: #selector(changeDockClose))
+        configureSwitch(quitLastWindowSwitch, action: #selector(changeQuitLastWindow))
         configureSwitch(minimizedSwitch, action: #selector(changeMinimized))
         configureSwitch(hiddenSwitch, action: #selector(changeHidden))
         configureSwitch(fullscreenSwitch, action: #selector(changeFullscreen))
         configureSwitch(spacesSwitch, action: #selector(changeSpaces))
         configureSwitch(windowlessSwitch, action: #selector(changeWindowless))
+        dockPreviewSizeControl.target = self
+        dockPreviewSizeControl.action = #selector(changeDockPreviewSize)
+        dockPreviewSizeControl.controlSize = .small
+        dockPreviewSizeControl.setAccessibilityLabel("Dock preview size")
 
         placementPopup.addItems(withTitles: SwitcherScreenPlacement.allCases.map(\.displayName))
         placementPopup.target = self
@@ -95,9 +109,13 @@ final class WindowOptionsController: NSWindowController {
             sectionTitle("Switcher"),
             row("Keyboard search", "Type while the switcher is open to filter windows.", searchSwitch),
             row("Window previews", "Show live thumbnails when screen recording access is available.", previewsSwitch),
-            row("Dock window previews", "Hover over a running app in the Dock to see its open windows.", dockPreviewsSwitch),
             row("Switcher location", "Choose which screen displays the switcher.", placementPopup),
             row("Window scope", "Show windows from every display or the current display only.", displayPopup),
+            sectionTitle("Dock Previews"),
+            row("Dock window previews", "Hover over a running app in the Dock to see its open windows.", dockPreviewsSwitch),
+            row("Preview size", "Choose the size of window previews shown above the Dock.", dockPreviewSizeControl),
+            row("Close windows from previews", "Show a close button on each Dock window preview.", dockCloseSwitch),
+            row("Quit after closing last window", "Quit an app when its final window is closed from a preview.", quitLastWindowSwitch),
             sectionTitle("Included Windows"),
             row("Minimized windows", "Include minimized windows.", minimizedSwitch),
             row("Hidden applications", "Include windows from hidden applications.", hiddenSwitch),
@@ -182,6 +200,10 @@ final class WindowOptionsController: NSWindowController {
         searchSwitch.state = preferences.searchEnabled ? .on : .off
         previewsSwitch.state = preferences.previewsEnabled ? .on : .off
         dockPreviewsSwitch.state = preferences.dockPreviewsEnabled ? .on : .off
+        dockCloseSwitch.state = preferences.dockPreviewCloseEnabled ? .on : .off
+        quitLastWindowSwitch.state = preferences.quitAppWhenLastWindowClosed ? .on : .off
+        dockPreviewSizeControl.selectedSegment = DockPreviewSize.allCases.firstIndex(of: preferences.dockPreviewSize) ?? 1
+        refreshDockPreviewControlStates()
         minimizedSwitch.state = preferences.showMinimized ? .on : .off
         hiddenSwitch.state = preferences.showHiddenApplications ? .on : .off
         fullscreenSwitch.state = preferences.showFullscreen ? .on : .off
@@ -224,7 +246,22 @@ final class WindowOptionsController: NSWindowController {
 
     @objc private func changeSearch() { preferences.searchEnabled = searchSwitch.state == .on }
     @objc private func changePreviews() { preferences.previewsEnabled = previewsSwitch.state == .on }
-    @objc private func changeDockPreviews() { preferences.dockPreviewsEnabled = dockPreviewsSwitch.state == .on }
+    @objc private func changeDockPreviews() {
+        preferences.dockPreviewsEnabled = dockPreviewsSwitch.state == .on
+        refreshDockPreviewControlStates()
+    }
+    @objc private func changeDockClose() {
+        preferences.dockPreviewCloseEnabled = dockCloseSwitch.state == .on
+        refreshDockPreviewControlStates()
+    }
+    @objc private func changeQuitLastWindow() {
+        preferences.quitAppWhenLastWindowClosed = quitLastWindowSwitch.state == .on
+    }
+
+    @objc private func changeDockPreviewSize() {
+        guard DockPreviewSize.allCases.indices.contains(dockPreviewSizeControl.selectedSegment) else { return }
+        preferences.dockPreviewSize = DockPreviewSize.allCases[dockPreviewSizeControl.selectedSegment]
+    }
     @objc private func changeMinimized() { preferences.showMinimized = minimizedSwitch.state == .on }
     @objc private func changeHidden() { preferences.showHiddenApplications = hiddenSwitch.state == .on }
     @objc private func changeFullscreen() { preferences.showFullscreen = fullscreenSwitch.state == .on }
@@ -258,6 +295,13 @@ final class WindowOptionsController: NSWindowController {
     @objc private func openScreenRecordingSettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
         NSWorkspace.shared.open(url)
+    }
+
+    private func refreshDockPreviewControlStates() {
+        let previewsEnabled = dockPreviewsSwitch.state == .on
+        dockPreviewSizeControl.isEnabled = previewsEnabled
+        dockCloseSwitch.isEnabled = previewsEnabled
+        quitLastWindowSwitch.isEnabled = previewsEnabled && dockCloseSwitch.state == .on
     }
 }
 

@@ -38,6 +38,18 @@ enum NativeTabBehavior: String, CaseIterable {
     }
 }
 
+enum DockPreviewSize: String, CaseIterable {
+    case small
+    case `default`
+
+    var displayName: String {
+        switch self {
+        case .small: return "Small"
+        case .default: return "Default"
+        }
+    }
+}
+
 final class WarpPreferences {
     var onChange: (() -> Void)?
 
@@ -61,6 +73,21 @@ final class WarpPreferences {
     var dockPreviewsEnabled: Bool {
         get { defaults.bool(forKey: "dockPreviewsEnabled") }
         set { set(newValue, forKey: "dockPreviewsEnabled") }
+    }
+
+    var dockPreviewCloseEnabled: Bool {
+        get { defaults.bool(forKey: "dockPreviewCloseEnabled") }
+        set { set(newValue, forKey: "dockPreviewCloseEnabled") }
+    }
+
+    var quitAppWhenLastWindowClosed: Bool {
+        get { defaults.bool(forKey: "quitAppWhenLastWindowClosed") }
+        set { set(newValue, forKey: "quitAppWhenLastWindowClosed") }
+    }
+
+    var dockPreviewSize: DockPreviewSize {
+        get { DockPreviewSize(rawValue: defaults.string(forKey: "dockPreviewSize") ?? "") ?? .default }
+        set { set(newValue.rawValue, forKey: "dockPreviewSize") }
     }
 
     var showMinimized: Bool {
@@ -140,6 +167,9 @@ final class WarpPreferences {
             "searchEnabled": true,
             "previewsEnabled": true,
             "dockPreviewsEnabled": true,
+            "dockPreviewCloseEnabled": true,
+            "quitAppWhenLastWindowClosed": false,
+            "dockPreviewSize": DockPreviewSize.default.rawValue,
             "showMinimizedWindows": true,
             "showHiddenApplications": true,
             "showFullscreenWindows": true,

@@ -39,6 +39,43 @@ sleep 3
 
 osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
 defaults write com.warptab.app dockPreviewsEnabled -bool true
+defaults write com.warptab.app dockPreviewCloseEnabled -bool true
+defaults write com.warptab.app quitAppWhenLastWindowClosed -bool false
+defaults write com.warptab.app dockPreviewSize default
 open -n /Applications/WarpTab.app --args --background
-sleep 2
-"$HARNESS"
+sleep 3
+"$HARNESS" --test-dock-click
+
+osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+pkill -x WarpTabFixture 2>/dev/null || true
+defaults write com.warptab.app dockPreviewSize small
+open -n "$fixture_app"
+open -n /Applications/WarpTab.app --args --background
+sleep 3
+"$HARNESS" --expect-small
+
+osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+pkill -x WarpTabFixture 2>/dev/null || true
+defaults write com.warptab.app dockPreviewSize default
+defaults write com.warptab.app dockPreviewCloseEnabled -bool false
+open -n "$fixture_app"
+open -n /Applications/WarpTab.app --args --background
+sleep 3
+"$HARNESS" --expect-no-close
+
+osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+pkill -x WarpTabFixture 2>/dev/null || true
+defaults write com.warptab.app dockPreviewCloseEnabled -bool true
+defaults write com.warptab.app quitAppWhenLastWindowClosed -bool false
+open -n "$fixture_app" --args --single-window
+open -n /Applications/WarpTab.app --args --background
+sleep 3
+"$HARNESS" --last-window-keep-open
+
+osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+pkill -x WarpTabFixture 2>/dev/null || true
+defaults write com.warptab.app quitAppWhenLastWindowClosed -bool true
+open -n "$fixture_app" --args --single-window
+open -n /Applications/WarpTab.app --args --background
+sleep 3
+"$HARNESS" --last-window-quit

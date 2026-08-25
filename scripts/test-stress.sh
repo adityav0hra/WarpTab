@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
-PREFERENCES_BACKUP=$(mktemp /tmp/warptab-stress-preferences.XXXXXX.plist)
+PREFERENCES_BACKUP=$(mktemp /tmp/warptab-stress-preferences.XXXXXX)
 HARNESS="$PROJECT_DIR/.build/warptab-stress-tests"
 
 defaults export com.warptab.app "$PREFERENCES_BACKUP" >/dev/null

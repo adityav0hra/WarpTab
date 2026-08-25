@@ -18,7 +18,7 @@ WarpTab gives every window its own entry in a compact, native macOS switcher. Th
 - **Minimized windows included** — select one to restore and focus it.
 - **Window history that feels natural** — individual windows are ordered by most-recent use, including windows from the same app.
 - **Same-app switching** — press <kbd>⌥</kbd> <kbd>`</kbd> to cycle only through windows of the current application.
-- **Dock window previews** — hover over a running app in the Dock to see live previews of its open windows, then click one to focus it.
+- **Dock window previews** — hover over a running app in the Dock to see its open windows, choose Default or Small previews, focus a window, or close it directly. Optionally quit an app when its final window is closed.
 - **Hidden, full-screen, and cross-Space windows** — WarpTab keeps discovered windows available and focuses the exact target.
 - **Search and navigation** — type an app or window name, use arrows, reverse with <kbd>⇧</kbd> <kbd>Tab</kbd>, press <kbd>Return</kbd> to switch, or <kbd>Esc</kbd> to cancel.
 - **Window controls** — while the switcher is open, use <kbd>⌘</kbd> <kbd>W</kbd>, <kbd>⌘</kbd> <kbd>M</kbd>, or <kbd>⌘</kbd> <kbd>H</kbd> on the selected window.

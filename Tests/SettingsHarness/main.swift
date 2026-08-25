@@ -109,7 +109,8 @@ require(waitUntil(2) {
 }, "advanced window options open")
 
 for expected in [
-    "Keyboard search", "Window previews", "Dock window previews", "Switcher location", "Window scope",
+    "Keyboard search", "Window previews", "Switcher location", "Window scope", "Dock window previews",
+    "Preview size", "Close windows from previews", "Quit after closing last window",
     "Minimized windows", "Hidden applications", "Full-screen windows", "Other Spaces",
     "Apps without windows", "Native window tabs", "Excluded Applications", "Screen Recording"
 ] {
