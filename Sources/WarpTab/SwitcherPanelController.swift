@@ -371,7 +371,7 @@ final class SwitcherPanelController: NSWindowController {
             panel.setContentSize(NSSize(width: 820, height: CGFloat(18 + visibleRows * 144) + searchHeight))
         }
 
-        if let frame = targetScreen()?.visibleFrame ?? NSScreen.main?.visibleFrame {
+        if let frame = targetScreen()?.visibleFrame ?? NSScreen.warpHardwareMain?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: frame.midX - panel.frame.width / 2, y: frame.midY - panel.frame.height / 2))
         }
         panel.orderFrontRegardless()
@@ -387,13 +387,13 @@ final class SwitcherPanelController: NSWindowController {
     private func targetScreen() -> NSScreen? {
         switch store.preferences.screenPlacement {
         case .mainDisplay:
-            return NSScreen.main
+            return NSScreen.warpHardwareMain
         case .mousePointer:
             let point = NSEvent.mouseLocation
-            return NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main
+            return NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.warpHardwareMain
         case .activeWindow:
             let screenID = store.allWindows().first(where: \.isFocused)?.screenIdentifier
-            return NSScreen.screens.first { $0.warpIdentifier == screenID } ?? NSScreen.main
+            return NSScreen.screens.first { $0.warpIdentifier == screenID } ?? NSScreen.warpHardwareMain
         }
     }
 }

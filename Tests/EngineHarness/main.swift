@@ -169,12 +169,21 @@ private func testNativeTabSafety() throws {
     try expect(!NativeTabSupport.allowsIndividualTabs(bundleIdentifier: "org.mozilla.firefox"), "Firefox website-tab exclusion")
 }
 
+private func testHardwareMainDisplayResolution() throws {
+    let expectedIdentifier = String(CGMainDisplayID())
+    try expect(
+        NSScreen.warpHardwareMain?.warpIdentifier == expectedIdentifier,
+        "Hardware main display resolution"
+    )
+}
+
 do {
     try testMRU()
     try testSearch()
     try testFiltering()
     try testPreferences()
     try testNativeTabSafety()
+    try testHardwareMainDisplayResolution()
     print("WarpTab engine tests passed: \(passed) assertions")
 } catch {
     fputs("WarpTab engine tests failed: \(error)\n", stderr)

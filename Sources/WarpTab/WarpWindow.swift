@@ -45,6 +45,14 @@ struct DisplaySnapshot: Equatable {
 }
 
 extension NSScreen {
+    static var warpHardwareMain: NSScreen? {
+        let mainDisplayIdentifier = CGMainDisplayID()
+        return screens.first { screen in
+            let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            return number?.uint32Value == mainDisplayIdentifier
+        } ?? screens.first
+    }
+
     var warpIdentifier: String {
         let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
         return number?.stringValue ?? NSStringFromRect(frame)
