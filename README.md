@@ -123,3 +123,7 @@ Package.swift        Swift Package Manager configuration
 ## Contributing
 
 Bug reports and focused pull requests are welcome. Run `./scripts/test-engine.sh` for the portable logic suite. The live scripts require Accessibility permission and an installed `/Applications/WarpTab.app`.
+
+## License
+
+WarpTab is available under the [MIT License](LICENSE).

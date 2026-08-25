@@ -17,6 +17,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp Resources/Info.plist "$APP_DIR/Contents/Info.plist"
 cp .build/release/WarpTab "$APP_DIR/Contents/MacOS/WarpTab"
 cp Resources/WarpTab.icns "$APP_DIR/Contents/Resources/WarpTab.icns"
+cp LICENSE "$APP_DIR/Contents/Resources/LICENSE"
 codesign --force --deep --sign - \
   --requirements '=designated => identifier "com.warptab.app"' \
   "$APP_DIR"
