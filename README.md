@@ -126,4 +126,7 @@ Bug reports and focused pull requests are welcome. Run `./scripts/test-engine.sh
 
 ## License
 
-WarpTab is available under the [MIT License](LICENSE).
+WarpTab is source-available under a [proprietary license](LICENSE). Personal,
+non-commercial use and private modification are permitted. Publishing,
+redistribution, sublicensing, selling, and distributing modified copies are
+not permitted without prior written permission.
