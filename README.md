@@ -18,6 +18,7 @@ WarpTab gives every window its own entry in a compact, native macOS switcher. Th
 - **Minimized windows included** — select one to restore and focus it.
 - **Window history that feels natural** — individual windows are ordered by most-recent use, including windows from the same app.
 - **Same-app switching** — press <kbd>⌥</kbd> <kbd>`</kbd> to cycle only through windows of the current application.
+- **Dock window previews** — hover over a running app in the Dock to see live previews of its open windows, then click one to focus it.
 - **Hidden, full-screen, and cross-Space windows** — WarpTab keeps discovered windows available and focuses the exact target.
 - **Search and navigation** — type an app or window name, use arrows, reverse with <kbd>⇧</kbd> <kbd>Tab</kbd>, press <kbd>Return</kbd> to switch, or <kbd>Esc</kbd> to cancel.
 - **Window controls** — while the switcher is open, use <kbd>⌘</kbd> <kbd>W</kbd>, <kbd>⌘</kbd> <kbd>M</kbd>, or <kbd>⌘</kbd> <kbd>H</kbd> on the selected window.
@@ -102,6 +103,7 @@ The WarpTab app lets you:
 - Record a custom shortcut
 - Switch between List and Thumbnail layouts
 - Control search, thumbnail previews, and native macOS tab handling
+- Enable or disable window previews when hovering over Dock apps
 - Include or hide minimized, hidden, full-screen, other-Space, and windowless items
 - Choose the switcher display and whether to show windows from every display
 - Exclude applications by bundle identifier
@@ -115,7 +117,7 @@ Closing the settings window removes WarpTab from the Dock while it continues run
 Sources/WarpTab/     AppKit application and window-switching logic
 Resources/           App metadata and icon assets
 scripts/build-app.sh Release build and app-bundle script
-scripts/test-*.sh    Engine, live integration, UI, scale, preview, and app-matrix checks
+scripts/test-*.sh    Engine, live integration, Dock, UI, scale, preview, and app-matrix checks
 Tests/               Deterministic harnesses and a native AppKit window fixture
 Package.swift        Swift Package Manager configuration
 ```

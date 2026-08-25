@@ -6,6 +6,7 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let isBackgroundLaunch = CommandLine.arguments.contains("--background")
     private let preferences = WarpPreferences()
+    private let previewCache = PreviewCache()
     private lazy var store = WindowStore(preferences: preferences)
     private var configuredShortcut: SwitcherShortcut {
         let stored = SwitcherShortcut(storageValue: UserDefaults.standard.string(forKey: "customShortcut") ?? "")
@@ -17,7 +18,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var switcher = SwitcherPanelController(
         store: store,
         shortcut: configuredShortcut,
-        layout: configuredLayout
+        layout: configuredLayout,
+        previewCache: previewCache
+    )
+    private lazy var dockPreviews = DockPreviewController(
+        store: store,
+        preferences: preferences,
+        previewCache: previewCache
     )
     // The global hotkey owns this callback for the full application lifetime.
     // Capture strongly so the switcher controller cannot disappear while the
@@ -54,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             requestAccessibilityPermission()
         }
         store.start()
+        dockPreviews.start()
         ensureMonitorStarted()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.ensureMonitorStarted()
@@ -66,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         permissionTimer?.invalidate()
         monitor.stop()
+        dockPreviews.stop()
         store.stop()
     }
 

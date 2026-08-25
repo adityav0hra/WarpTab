@@ -7,6 +7,7 @@ final class WindowOptionsController: NSWindowController {
 
     private let searchSwitch = NSSwitch()
     private let previewsSwitch = NSSwitch()
+    private let dockPreviewsSwitch = NSSwitch()
     private let minimizedSwitch = NSSwitch()
     private let hiddenSwitch = NSSwitch()
     private let fullscreenSwitch = NSSwitch()
@@ -49,6 +50,7 @@ final class WindowOptionsController: NSWindowController {
 
         configureSwitch(searchSwitch, action: #selector(changeSearch))
         configureSwitch(previewsSwitch, action: #selector(changePreviews))
+        configureSwitch(dockPreviewsSwitch, action: #selector(changeDockPreviews))
         configureSwitch(minimizedSwitch, action: #selector(changeMinimized))
         configureSwitch(hiddenSwitch, action: #selector(changeHidden))
         configureSwitch(fullscreenSwitch, action: #selector(changeFullscreen))
@@ -93,6 +95,7 @@ final class WindowOptionsController: NSWindowController {
             sectionTitle("Switcher"),
             row("Keyboard search", "Type while the switcher is open to filter windows.", searchSwitch),
             row("Window previews", "Show live thumbnails when screen recording access is available.", previewsSwitch),
+            row("Dock window previews", "Hover over a running app in the Dock to see its open windows.", dockPreviewsSwitch),
             row("Switcher location", "Choose which screen displays the switcher.", placementPopup),
             row("Window scope", "Show windows from every display or the current display only.", displayPopup),
             sectionTitle("Included Windows"),
@@ -178,6 +181,7 @@ final class WindowOptionsController: NSWindowController {
     private func refreshControls() {
         searchSwitch.state = preferences.searchEnabled ? .on : .off
         previewsSwitch.state = preferences.previewsEnabled ? .on : .off
+        dockPreviewsSwitch.state = preferences.dockPreviewsEnabled ? .on : .off
         minimizedSwitch.state = preferences.showMinimized ? .on : .off
         hiddenSwitch.state = preferences.showHiddenApplications ? .on : .off
         fullscreenSwitch.state = preferences.showFullscreen ? .on : .off
@@ -220,6 +224,7 @@ final class WindowOptionsController: NSWindowController {
 
     @objc private func changeSearch() { preferences.searchEnabled = searchSwitch.state == .on }
     @objc private func changePreviews() { preferences.previewsEnabled = previewsSwitch.state == .on }
+    @objc private func changeDockPreviews() { preferences.dockPreviewsEnabled = dockPreviewsSwitch.state == .on }
     @objc private func changeMinimized() { preferences.showMinimized = minimizedSwitch.state == .on }
     @objc private func changeHidden() { preferences.showHiddenApplications = hiddenSwitch.state == .on }
     @objc private func changeFullscreen() { preferences.showFullscreen = fullscreenSwitch.state == .on }

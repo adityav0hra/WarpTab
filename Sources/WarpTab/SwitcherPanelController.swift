@@ -29,7 +29,7 @@ enum SelectedWindowAction {
 
 final class SwitcherPanelController: NSWindowController {
     private let store: WindowStore
-    private let previewCache = PreviewCache()
+    private let previewCache: PreviewCache
     private var windows: [WarpWindow] = []
     private var unfilteredWindows: [WarpWindow] = []
     private var rows: [WindowRowView] = []
@@ -43,10 +43,16 @@ final class SwitcherPanelController: NSWindowController {
     private var shortcut: SwitcherShortcut
     private var layout: SwitcherLayout
 
-    init(store: WindowStore, shortcut: SwitcherShortcut, layout: SwitcherLayout) {
+    init(
+        store: WindowStore,
+        shortcut: SwitcherShortcut,
+        layout: SwitcherLayout,
+        previewCache: PreviewCache = PreviewCache()
+    ) {
         self.store = store
         self.shortcut = shortcut
         self.layout = layout
+        self.previewCache = previewCache
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 510, height: 360),
             styleMask: [.borderless, .nonactivatingPanel],

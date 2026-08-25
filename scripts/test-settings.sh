@@ -16,6 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 pkill -x WarpTab 2>/dev/null || true
+defaults write com.warptab.app customShortcut '48,2048,Tab'
 open -n /Applications/WarpTab.app
 sleep 1
 

@@ -82,6 +82,12 @@ final class WindowStore {
         return mru.ordered(filtered)
     }
 
+    func dockPreviewWindows(bundleIdentifier: String) -> [WarpWindow] {
+        mru.ordered(allWindows().filter {
+            $0.bundleIdentifier == bundleIdentifier && !$0.isWindowlessApplication
+        })
+    }
+
     func beginSwitching() {
         // Promote the exact window that is frontmost at the moment the shortcut
         // is pressed. Event-driven refreshes are normally enough, but a user can

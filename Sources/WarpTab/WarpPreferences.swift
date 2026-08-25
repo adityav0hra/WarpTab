@@ -58,6 +58,11 @@ final class WarpPreferences {
         set { set(newValue, forKey: "previewsEnabled") }
     }
 
+    var dockPreviewsEnabled: Bool {
+        get { defaults.bool(forKey: "dockPreviewsEnabled") }
+        set { set(newValue, forKey: "dockPreviewsEnabled") }
+    }
+
     var showMinimized: Bool {
         get { defaults.bool(forKey: "showMinimizedWindows") }
         set { set(newValue, forKey: "showMinimizedWindows") }
@@ -134,6 +139,7 @@ final class WarpPreferences {
         defaults.register(defaults: [
             "searchEnabled": true,
             "previewsEnabled": true,
+            "dockPreviewsEnabled": true,
             "showMinimizedWindows": true,
             "showHiddenApplications": true,
             "showFullscreenWindows": true,
