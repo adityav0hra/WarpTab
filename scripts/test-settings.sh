@@ -5,6 +5,14 @@ PROJECT_DIR="${0:A:h:h}"
 BACKUP_DIR="$(mktemp -d)"
 PREFERENCES_BACKUP="$BACKUP_DIR/preferences.plist"
 
+wait_for_exit() {
+  for _ in {1..30}; do
+    pgrep -x WarpTab >/dev/null || return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 defaults export com.warptab.app "$PREFERENCES_BACKUP" >/dev/null
 
 cleanup() {
@@ -16,6 +24,7 @@ cleanup() {
 trap cleanup EXIT
 
 pkill -x WarpTab 2>/dev/null || true
+wait_for_exit
 defaults write com.warptab.app customShortcut '48,2048,Tab'
 open -n /Applications/WarpTab.app
 sleep 1

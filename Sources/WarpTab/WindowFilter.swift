@@ -22,6 +22,29 @@ struct WindowFilterOptions: Equatable {
     let excludedBundleIdentifiers: Set<String>
 }
 
+struct DockPreviewFilterOptions: Equatable {
+    let showMinimized: Bool
+    let showHiddenApplications: Bool
+    let showFullscreen: Bool
+}
+
+enum DockPreviewFilter {
+    static func apply(
+        to windows: [WarpWindow],
+        bundleIdentifier: String,
+        options: DockPreviewFilterOptions
+    ) -> [WarpWindow] {
+        windows.filter { window in
+            guard window.bundleIdentifier == bundleIdentifier,
+                  !window.isWindowlessApplication else { return false }
+            if window.isMinimized && !options.showMinimized { return false }
+            if window.isHidden && !options.showHiddenApplications { return false }
+            if window.isFullscreen && !options.showFullscreen { return false }
+            return true
+        }
+    }
+}
+
 enum WindowFilter {
     static func apply(
         to windows: [WarpWindow],

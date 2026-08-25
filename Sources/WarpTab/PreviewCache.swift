@@ -20,14 +20,19 @@ final class PreviewCache: @unchecked Sendable {
         cache.totalCostLimit = 96 * 1_024 * 1_024
     }
 
-    func image(for window: WarpWindow, refresh: @escaping (String, NSImage?) -> Void) -> NSImage? {
-        if let cached = cache.object(forKey: window.identity as NSString) { return cached }
-        guard CGPreflightScreenCaptureAccess(), let windowID = window.windowID else { return nil }
+    func image(
+        for window: WarpWindow,
+        forceRefresh: Bool = false,
+        refresh: @escaping (String, NSImage?) -> Void
+    ) -> NSImage? {
+        let cached = cache.object(forKey: window.identity as NSString)
+        if cached != nil && !forceRefresh { return cached }
+        guard CGPreflightScreenCaptureAccess(), let windowID = window.windowID else { return cached }
 
         stateLock.lock()
         let shouldCapture = pending.insert(window.identity).inserted
         stateLock.unlock()
-        guard shouldCapture else { return nil }
+        guard shouldCapture else { return cached }
 
         let identity = window.identity
         if #available(macOS 14.0, *) {
@@ -54,7 +59,7 @@ final class PreviewCache: @unchecked Sendable {
                 }
             }
         }
-        return nil
+        return cached
     }
 
     func invalidate(_ identity: String) {

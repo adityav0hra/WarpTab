@@ -251,7 +251,7 @@ final class SwitcherPanelController: NSWindowController {
                 window: item,
                 number: index + 1,
                 layout: layout,
-                thumbnail: layout == .thumbnails && store.preferences.previewsEnabled
+                thumbnail: layout == .thumbnails
                     ? previewCache.image(for: item) { [weak self] identity, image in
                         self?.refreshThumbnail(identity: identity, image: image)
                     }

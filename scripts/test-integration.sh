@@ -46,7 +46,7 @@ wait_for_exit WarpTabFixture
 wait_for_exit WarpTab
 "$fixture_app/Contents/MacOS/WarpTabFixture" >/dev/null 2>&1 &
 sleep 1
-open -n /Applications/WarpTab.app --args --background
+/Applications/WarpTab.app/Contents/MacOS/WarpTab --background >/dev/null 2>&1 &
 sleep 3
 
 swiftc \

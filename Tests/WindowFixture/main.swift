@@ -2,9 +2,40 @@ import AppKit
 
 final class FixtureDelegate: NSObject, NSApplicationDelegate {
     private var windows: [NSWindow] = []
+    private var livePreviewObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
+        if CommandLine.arguments.contains("--aspect-previews") {
+            let portrait = makeWindow(title: "WarpTab Portrait Preview", origin: NSPoint(x: 120, y: 180))
+            portrait.setContentSize(NSSize(width: 260, height: 620))
+            portrait.tabbingMode = .disallowed
+            let wide = makeWindow(title: "WarpTab Wide Preview", origin: NSPoint(x: 420, y: 420))
+            wide.setContentSize(NSSize(width: 900, height: 200))
+            wide.tabbingMode = .disallowed
+            windows = [portrait, wide]
+            portrait.orderFront(nil)
+            wide.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
+        if CommandLine.arguments.contains("--live-preview") {
+            let window = makeWindow(title: "WarpTab Live Preview", origin: NSPoint(x: 220, y: 420))
+            window.tabbingMode = .disallowed
+            window.contentView?.wantsLayer = true
+            window.contentView?.layer?.backgroundColor = NSColor.systemRed.cgColor
+            windows = [window]
+            livePreviewObserver = DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.warptab.fixture.update-preview"),
+                object: nil,
+                queue: .main
+            ) { [weak window] _ in
+                window?.contentView?.layer?.backgroundColor = NSColor.systemGreen.cgColor
+            }
+            window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
         if CommandLine.arguments.contains("--single-window") {
             let window = makeWindow(title: "WarpTab Single Window", origin: NSPoint(x: 220, y: 420))
             window.tabbingMode = .disallowed

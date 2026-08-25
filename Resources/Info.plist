@@ -21,7 +21,7 @@
     <key>CFBundleShortVersionString</key>
     <string>2.0.0</string>
 	<key>CFBundleVersion</key>
-    <string>20</string>
+    <string>21</string>
     <key>LSUIElement</key>
     <true/>
     <key>LSMinimumSystemVersion</key>
@@ -31,6 +31,6 @@
 	<key>NSAccessibilityUsageDescription</key>
 	<string>WarpTab needs Accessibility access to list, select, and focus windows.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>WarpTab uses Screen Recording access to show window previews in Thumbnail view.</string>
+    <string>WarpTab uses Screen Recording access to show live window previews.</string>
 </dict>
 </plist>

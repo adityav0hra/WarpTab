@@ -135,6 +135,38 @@ private func testFiltering() throws {
         to: [first, second], options: currentDisplay,
         targetScreenIdentifier: nil, ownProcessIdentifier: -1
     ).count == 2, "Disconnected-display fallback")
+
+    let dockWindows = [
+        window("dock-normal"),
+        window("dock-minimized", minimized: true),
+        window("dock-hidden", hidden: true),
+        window("dock-fullscreen", fullscreen: true),
+        window("dock-windowless", windowless: true),
+        window("other-app", bundle: "test.other")
+    ]
+    let dockInclusive = DockPreviewFilter.apply(
+        to: dockWindows,
+        bundleIdentifier: "test.fixture",
+        options: DockPreviewFilterOptions(
+            showMinimized: true,
+            showHiddenApplications: true,
+            showFullscreen: true
+        )
+    )
+    try expect(
+        dockInclusive.map(\.identity) == ["dock-normal", "dock-minimized", "dock-hidden", "dock-fullscreen"],
+        "Dock previews include enabled minimized, hidden, and full-screen windows"
+    )
+    let dockRestrictive = DockPreviewFilter.apply(
+        to: dockWindows,
+        bundleIdentifier: "test.fixture",
+        options: DockPreviewFilterOptions(
+            showMinimized: false,
+            showHiddenApplications: false,
+            showFullscreen: false
+        )
+    )
+    try expect(dockRestrictive.map(\.identity) == ["dock-normal"], "Dock preview visibility filters")
 }
 
 private func testPreferences() throws {
@@ -148,6 +180,13 @@ private func testPreferences() throws {
     try expect(preferences.dockPreviewCloseEnabled, "Dock close-button default")
     try expect(!preferences.quitAppWhenLastWindowClosed, "Quit-after-last-window default")
     try expect(preferences.dockPreviewSize == .default, "Dock preview size default")
+    try expect(preferences.dockPreviewShowMinimized, "Dock minimized-window default")
+    try expect(preferences.dockPreviewShowHiddenApplications, "Dock hidden-app default")
+    try expect(preferences.dockPreviewShowFullscreen, "Dock full-screen default")
+    try expect(preferences.minimizeFrontmostWindowOnDockClick, "Dock-click minimize default")
+    try expect(preferences.chooseWindowOnMultiWindowDockClick, "Multi-window Dock chooser default")
+    try expect(preferences.minimizeAllWindowsOnDockDoubleClick, "Dock double-click minimize-all default")
+    try expect(preferences.dockDoubleClickMinimizeScope == .allWindows, "Dock double-click scope default")
     try expect(preferences.showMinimized, "Minimized default")
     try expect(preferences.showHiddenApplications, "Hidden default")
     try expect(preferences.showFullscreen, "Fullscreen default")
@@ -161,6 +200,13 @@ private func testPreferences() throws {
     preferences.dockPreviewCloseEnabled = false
     preferences.quitAppWhenLastWindowClosed = true
     preferences.dockPreviewSize = .small
+    preferences.dockPreviewShowMinimized = false
+    preferences.dockPreviewShowHiddenApplications = false
+    preferences.dockPreviewShowFullscreen = false
+    preferences.minimizeFrontmostWindowOnDockClick = false
+    preferences.chooseWindowOnMultiWindowDockClick = false
+    preferences.minimizeAllWindowsOnDockDoubleClick = false
+    preferences.dockDoubleClickMinimizeScope = .topWindow
     preferences.displayScope = .currentDisplay
     preferences.excludedBundleIdentifiers = ["test.excluded"]
     try expect(!preferences.showHiddenApplications, "Preference persistence")
@@ -168,9 +214,16 @@ private func testPreferences() throws {
     try expect(!preferences.dockPreviewCloseEnabled, "Dock close-button preference persistence")
     try expect(preferences.quitAppWhenLastWindowClosed, "Quit-after-last-window preference persistence")
     try expect(preferences.dockPreviewSize == .small, "Dock preview size persistence")
+    try expect(!preferences.dockPreviewShowMinimized, "Dock minimized-window preference persistence")
+    try expect(!preferences.dockPreviewShowHiddenApplications, "Dock hidden-app preference persistence")
+    try expect(!preferences.dockPreviewShowFullscreen, "Dock full-screen preference persistence")
+    try expect(!preferences.minimizeFrontmostWindowOnDockClick, "Dock-click minimize preference persistence")
+    try expect(!preferences.chooseWindowOnMultiWindowDockClick, "Multi-window Dock chooser preference persistence")
+    try expect(!preferences.minimizeAllWindowsOnDockDoubleClick, "Dock double-click minimize-all preference persistence")
+    try expect(preferences.dockDoubleClickMinimizeScope == .topWindow, "Dock double-click scope persistence")
     try expect(preferences.displayScope == .currentDisplay, "Display preference persistence")
     try expect(preferences.excludedBundleIdentifiers == ["test.excluded"], "Exclusion persistence")
-    try expect(changes == 7, "Preference change notifications")
+    try expect(changes == 14, "Preference change notifications")
 }
 
 private func testNativeTabSafety() throws {

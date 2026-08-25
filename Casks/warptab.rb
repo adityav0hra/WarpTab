@@ -1,6 +1,6 @@
 cask "warptab" do
-  version "2.0.0-beta.1"
-  sha256 "d3ea1f1a9e20234d871e4c566c3034a25caff2e09127dec9908a3f2143d585b3"
+  version "2.0.0-beta.2"
+  sha256 "7ab46e74c379298c94611292a74a15b6cab713ab3b45c4dd2bf0497e61827015"
 
   url "https://github.com/adityav0hra/WarpTab/releases/download/v#{version}/WarpTab-#{version}.zip"
   name "WarpTab"

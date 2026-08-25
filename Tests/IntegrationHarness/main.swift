@@ -98,9 +98,17 @@ private func activateFixtureAsFrontmost(timeout: TimeInterval = 3) throws {
 }
 
 private func activeDestination() throws -> String {
-    let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+    guard let application = NSWorkspace.shared.frontmostApplication else { return "unknown" }
+    let bundle = application.bundleIdentifier ?? "unknown"
     if bundle == "com.warptab.fixture" {
         return "\(bundle):\(try focusedFixtureTitle() ?? "untitled")"
+    }
+    let axApplication = AXUIElementCreateApplication(application.processIdentifier)
+    if let focusedWindowValue = attribute(axApplication, kAXFocusedWindowAttribute) {
+        let focusedWindow = focusedWindowValue as! AXUIElement
+        if let title = attribute(focusedWindow, kAXTitleAttribute) as? String, !title.isEmpty {
+            return "\(bundle):\(title)"
+        }
     }
     return bundle
 }
@@ -137,7 +145,7 @@ private func openSameApplicationSwitcher(backwards: Bool = false) {
 private func releaseSwitcherModifiers(backwards: Bool = false) {
     if backwards { postKey(56, down: false, flags: [.maskAlternate]) }
     postKey(58, down: false, flags: [])
-    wait(0.45)
+    wait(0.8)
 }
 
 private func typeSearch(_ text: String) throws {
@@ -185,26 +193,34 @@ private func overlayText() throws -> String {
 }
 
 private func selectedNativeTabTitle() throws -> String? {
-    let window = try fixtureWindow(titled: try focusedFixtureTitle() ?? "")
-    guard let children = attribute(window, kAXChildrenAttribute) as? [AXUIElement],
-          let group = children.first(where: { attribute($0, kAXRoleAttribute) as? String == "AXTabGroup" }),
-          let tabs = attribute(group, kAXTabsAttribute) as? [AXUIElement] else { return nil }
-    return tabs.first(where: {
-        booleanAttribute($0, kAXValueAttribute) == true
-    }).flatMap { attribute($0, kAXTitleAttribute) as? String }
-}
-
-private func selectFixtureNativeTab(_ title: String) throws {
     for window in try fixtureWindows() {
         guard let children = attribute(window, kAXChildrenAttribute) as? [AXUIElement],
               let group = children.first(where: { attribute($0, kAXRoleAttribute) as? String == "AXTabGroup" }),
-              let tabs = attribute(group, kAXTabsAttribute) as? [AXUIElement],
-              let tab = tabs.first(where: { attribute($0, kAXTitleAttribute) as? String == title }) else { continue }
-        AXUIElementPerformAction(tab, kAXPressAction as CFString)
-        wait(0.18)
-        try focusFixtureWindow(title)
-        return
+              let tabs = attribute(group, kAXTabsAttribute) as? [AXUIElement] else { continue }
+        if let selected = tabs.first(where: { booleanAttribute($0, kAXValueAttribute) == true }) {
+            return attribute(selected, kAXTitleAttribute) as? String
+        }
     }
+    return nil
+}
+
+private func selectFixtureNativeTab(_ title: String) throws {
+    let deadline = Date().addingTimeInterval(2)
+    repeat {
+        for window in try fixtureWindows() {
+            guard let children = attribute(window, kAXChildrenAttribute) as? [AXUIElement],
+                  let group = children.first(where: { attribute($0, kAXRoleAttribute) as? String == "AXTabGroup" }),
+                  let tabs = attribute(group, kAXTabsAttribute) as? [AXUIElement],
+                  let tab = tabs.first(where: { attribute($0, kAXTitleAttribute) as? String == title }) else { continue }
+            AXUIElementPerformAction(tab, kAXPressAction as CFString)
+            wait(0.35)
+            if (try? fixtureWindow(titled: title)) != nil {
+                try focusFixtureWindow(title)
+                return
+            }
+        }
+        wait(0.1)
+    } while Date() < deadline
     throw IntegrationFailure.assertion("Missing fixture native tab: \(title)")
 }
 
@@ -239,6 +255,7 @@ private func runTests() throws {
     openSwitcher()
     releaseSwitcherModifiers()
     let quickDestination = try activeDestination()
+    print("Quick-switch destination: \(quickDestination)")
     try expect(
         quickDestination != "com.warptab.fixture:WarpTab Native Tab — One",
         "Quick Option-Tab activates the next MRU window"
@@ -247,8 +264,10 @@ private func runTests() throws {
     try resetFocusHistory()
     openSwitcher()
     press(48, flags: [.maskAlternate], repeatValue: 1)
+    wait(0.2)
     releaseSwitcherModifiers()
     let repeatDestination = try activeDestination()
+    print("Repeated-Tab destination: \(repeatDestination)")
     try expect(repeatDestination != quickDestination, "Tab repeat advances selection beyond the quick-switch target")
 
     try resetFocusHistory()
@@ -339,7 +358,12 @@ private func runTests() throws {
     press(36)
     wait(0.6)
     postKey(58, down: false, flags: [])
-    let activatedNativeTab = try selectedNativeTabTitle()
+    let nativeTabDeadline = Date().addingTimeInterval(2)
+    var activatedNativeTab = try selectedNativeTabTitle()
+    while activatedNativeTab != "WarpTab Native Tab — Two", Date() < nativeTabDeadline {
+        wait(0.1)
+        activatedNativeTab = try selectedNativeTabTitle()
+    }
     print("Native tab activation: focused=\(try focusedFixtureTitle() ?? "nil"), selected=\(activatedNativeTab ?? "nil")")
     try expect(activatedNativeTab == "WarpTab Native Tab — Two", "Selecting a native tab presses the exact AX tab")
     wait(0.55)

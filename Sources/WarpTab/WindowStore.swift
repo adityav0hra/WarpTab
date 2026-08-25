@@ -83,9 +83,11 @@ final class WindowStore {
     }
 
     func dockPreviewWindows(bundleIdentifier: String) -> [WarpWindow] {
-        mru.ordered(allWindows().filter {
-            $0.bundleIdentifier == bundleIdentifier && !$0.isWindowlessApplication
-        })
+        mru.ordered(DockPreviewFilter.apply(
+            to: allWindows(),
+            bundleIdentifier: bundleIdentifier,
+            options: preferences.dockPreviewFilterOptions
+        ))
     }
 
     func beginSwitching() {
@@ -281,6 +283,7 @@ final class WindowStore {
             let axWindows = (attribute(appElement, kAXWindowsAttribute) as? [AXUIElement]) ?? []
             var unusedCandidates = cgByPID[app.processIdentifier] ?? []
             var usableWindowCount = 0
+            var seenNativeTabGroups = Set<CFHashCode>()
 
             for element in axWindows {
                 guard isSwitchable(element) else { continue }
@@ -289,9 +292,14 @@ final class WindowStore {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let rawBounds = bounds(of: element)
                 guard minimized || rawBounds.width >= 120 && rawBounds.height >= 80 else { continue }
-                let nativeTabs = preferences.nativeTabBehavior == .individual
-                    ? nativeWindowTabs(in: element, application: app)
-                    : []
+                let nativeTabGroup = preferences.nativeTabBehavior == .individual
+                    ? nativeWindowTabGroup(in: element, application: app)
+                    : nil
+                let nativeTabs = nativeTabGroup?.tabs ?? []
+                if nativeTabs.count > 1 {
+                    guard let nativeTabGroup,
+                          seenNativeTabGroups.insert(nativeTabGroup.identity).inserted else { continue }
+                }
                 let tabCandidates: [NativeTabCandidate?] = nativeTabs.count > 1
                     ? nativeTabs.map(Optional.some)
                     : [nil]
@@ -313,8 +321,13 @@ final class WindowStore {
                     (focusedElement.map { CFEqual($0, element) } ?? false)
                 for tab in tabCandidates {
                     let itemTitle = tab?.title ?? (title.isEmpty ? appName : title)
+                    let identity = if let tab, let nativeTabGroup {
+                        "\(app.processIdentifier):ax-tab-group:\(nativeTabGroup.identity):tab:\(CFHash(tab.element))"
+                    } else {
+                        windowIdentity
+                    }
                     results.append(WarpWindow(
-                        identity: tab.map { "\(windowIdentity):tab:\(CFHash($0.element))" } ?? windowIdentity,
+                        identity: identity,
                         application: app,
                         axWindow: element,
                         axTab: tab?.element,
@@ -369,7 +382,9 @@ final class WindowStore {
         }
         // Accessibility may omit windows on another Space. Validate and merge
         // retained windows here so Accessibility IPC never stalls the UI thread.
-        return mergeRetainedWindows(results, retaining: previous)
+        var seenIdentities = Set<String>()
+        let uniqueResults = results.filter { seenIdentities.insert($0.identity).inserted }
+        return mergeRetainedWindows(uniqueResults, retaining: previous)
     }
 
     private func installWorkspaceObservers() {
@@ -492,19 +507,19 @@ final class WindowStore {
         return subrole == nil || subrole == kAXStandardWindowSubrole || subrole == kAXDialogSubrole
     }
 
-    private func nativeWindowTabs(
+    private func nativeWindowTabGroup(
         in window: AXUIElement,
         application: NSRunningApplication
-    ) -> [NativeTabCandidate] {
+    ) -> NativeTabGroup? {
         guard NativeTabSupport.allowsIndividualTabs(bundleIdentifier: application.bundleIdentifier),
               let children = attribute(window, kAXChildrenAttribute) as? [AXUIElement],
               let tabGroup = children.first(where: {
                   attribute($0, kAXRoleAttribute) as? String == "AXTabGroup"
               }),
               let tabs = attribute(tabGroup, kAXTabsAttribute) as? [AXUIElement],
-              tabs.count > 1 else { return [] }
+              tabs.count > 1 else { return nil }
 
-        return tabs.compactMap { tab in
+        let candidates: [NativeTabCandidate] = tabs.compactMap { tab in
             guard attribute(tab, kAXSubroleAttribute) as? String == "AXTabButton",
                   let tabWindow = attribute(tab, kAXWindowAttribute).map({ $0 as! AXUIElement }),
                   CFEqual(tabWindow, window),
@@ -515,6 +530,7 @@ final class WindowStore {
             let selected = (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue ?? false
             return NativeTabCandidate(element: tab, title: title, isSelected: selected)
         }
+        return NativeTabGroup(identity: CFHash(tabGroup), tabs: candidates)
     }
 
     private func supportsAction(_ element: AXUIElement, _ action: String) -> Bool {
@@ -612,6 +628,11 @@ private struct NativeTabCandidate {
     let element: AXUIElement
     let title: String
     let isSelected: Bool
+}
+
+private struct NativeTabGroup {
+    let identity: CFHashCode
+    let tabs: [NativeTabCandidate]
 }
 
 private extension CGRect {

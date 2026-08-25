@@ -57,16 +57,23 @@ final class WindowActivator {
     ) {
         window.application.unhide()
         window.application.activate(options: [.activateIgnoringOtherApps])
+        let activationElement = window.axTab
+            .flatMap { attribute($0, kAXWindowAttribute) }
+            .map { $0 as! AXUIElement } ?? element
         AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        focus(activationElement, in: appElement)
+        if let tab = window.axTab {
+            AXUIElementSetAttributeValue(tab, kAXValueAttribute as CFString, kCFBooleanTrue)
+            AXUIElementPerformAction(tab, kAXPressAction as CFString)
+        }
+    }
+
+    private func focus(_ element: AXUIElement, in appElement: AXUIElement) {
         AXUIElementSetAttributeValue(appElement, kAXMainWindowAttribute as CFString, element)
         AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, element)
         AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        if let tab = window.axTab {
-            AXUIElementSetAttributeValue(tab, kAXValueAttribute as CFString, kCFBooleanTrue)
-            AXUIElementPerformAction(tab, kAXPressAction as CFString)
-        }
     }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {

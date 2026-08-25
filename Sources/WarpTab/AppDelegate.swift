@@ -32,7 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var monitor = ShortcutMonitor(shortcut: configuredShortcut) { event in
         self.handle(event)
     }
-    private lazy var settingsWindow = SettingsWindowController(
+    private lazy var settingsWindow = SystemSettingsWindowController(
+        preferences: preferences,
+        store: store,
         initiallyEnabled: UserDefaults.standard.object(forKey: "switcherEnabled") as? Bool ?? true,
         initiallySelectedShortcut: configuredShortcut,
         initiallySelectedLayout: configuredLayout,
@@ -40,12 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onShortcutChange: { [weak self] shortcut in self?.setShortcut(shortcut) ?? false },
         onLayoutChange: { [weak self] layout in self?.setLayout(layout) },
         onOpenAccessibility: { [weak self] in self?.openAccessibilitySettings() },
-        onOpenWindowOptions: { [weak self] in self?.showWindowOptions() },
         onClose: { [weak self] in self?.settingsDidClose() }
     )
-    private lazy var windowOptions = WindowOptionsController(preferences: preferences, store: store)
     private var statusItem: NSStatusItem?
-    private var shortcutMenuItem: NSMenuItem?
     private var listLayoutMenuItem: NSMenuItem?
     private var thumbnailLayoutMenuItem: NSMenuItem?
     private var permissionTimer: Timer?
@@ -173,18 +172,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(showItem)
         menu.addItem(.separator())
 
-        let shortcutItem = NSMenuItem(title: "Shortcut: \(configuredShortcut.displayName)", action: nil, keyEquivalent: "")
-        shortcutItem.isEnabled = false
-        menu.addItem(shortcutItem)
-        shortcutMenuItem = shortcutItem
-        let sameAppItem = NSMenuItem(
-            title: "Same app: \(SwitcherShortcut.sameApplicationShortcut.displayName)",
-            action: nil,
-            keyEquivalent: ""
-        )
-        sameAppItem.isEnabled = false
-        menu.addItem(sameAppItem)
-
         let viewStyleItem = NSMenuItem(title: "View Style", action: nil, keyEquivalent: "")
         let viewStyleMenu = NSMenu(title: "View Style")
         for layout in SwitcherLayout.allCases {
@@ -202,11 +189,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         viewStyleItem.submenu = viewStyleMenu
         menu.addItem(viewStyleItem)
-
-        menu.addItem(.separator())
-        let permissionItem = NSMenuItem(title: "Open Accessibility Settings…", action: #selector(openAccessibilitySettings), keyEquivalent: "")
-        permissionItem.target = self
-        menu.addItem(permissionItem)
 
         menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Quit WarpTab", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -254,7 +236,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard monitor.changeShortcut(to: shortcut) else { return false }
         UserDefaults.standard.set(shortcut.storageValue, forKey: "customShortcut")
         switcher.updateShortcut(shortcut)
-        shortcutMenuItem?.title = "Shortcut: \(shortcut.displayName)"
         settingsWindow.refreshPermissionStatus(listenerRunning: monitor.isRunning)
         return true
     }
@@ -300,13 +281,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ensureMonitorStarted()
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindow.window?.makeKeyAndOrderFront(nil)
-    }
-
-    private func showWindowOptions() {
-        NSApplication.shared.setActivationPolicy(.regular)
-        windowOptions.showWindow(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        windowOptions.window?.makeKeyAndOrderFront(nil)
     }
 
     private func settingsDidClose() {

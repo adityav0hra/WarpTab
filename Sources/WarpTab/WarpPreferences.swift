@@ -50,6 +50,18 @@ enum DockPreviewSize: String, CaseIterable {
     }
 }
 
+enum DockDoubleClickMinimizeScope: String, CaseIterable {
+    case allWindows
+    case topWindow
+
+    var displayName: String {
+        switch self {
+        case .allWindows: return "All Windows"
+        case .topWindow: return "Top Window"
+        }
+    }
+}
+
 final class WarpPreferences {
     var onChange: (() -> Void)?
 
@@ -88,6 +100,45 @@ final class WarpPreferences {
     var dockPreviewSize: DockPreviewSize {
         get { DockPreviewSize(rawValue: defaults.string(forKey: "dockPreviewSize") ?? "") ?? .default }
         set { set(newValue.rawValue, forKey: "dockPreviewSize") }
+    }
+
+    var dockPreviewShowMinimized: Bool {
+        get { defaults.bool(forKey: "dockPreviewShowMinimized") }
+        set { set(newValue, forKey: "dockPreviewShowMinimized") }
+    }
+
+    var dockPreviewShowHiddenApplications: Bool {
+        get { defaults.bool(forKey: "dockPreviewShowHiddenApplications") }
+        set { set(newValue, forKey: "dockPreviewShowHiddenApplications") }
+    }
+
+    var dockPreviewShowFullscreen: Bool {
+        get { defaults.bool(forKey: "dockPreviewShowFullscreen") }
+        set { set(newValue, forKey: "dockPreviewShowFullscreen") }
+    }
+
+    var minimizeFrontmostWindowOnDockClick: Bool {
+        get { defaults.bool(forKey: "minimizeFrontmostWindowOnDockClick") }
+        set { set(newValue, forKey: "minimizeFrontmostWindowOnDockClick") }
+    }
+
+    var chooseWindowOnMultiWindowDockClick: Bool {
+        get { defaults.bool(forKey: "chooseWindowOnMultiWindowDockClick") }
+        set { set(newValue, forKey: "chooseWindowOnMultiWindowDockClick") }
+    }
+
+    var minimizeAllWindowsOnDockDoubleClick: Bool {
+        get { defaults.bool(forKey: "minimizeAllWindowsOnDockDoubleClick") }
+        set { set(newValue, forKey: "minimizeAllWindowsOnDockDoubleClick") }
+    }
+
+    var dockDoubleClickMinimizeScope: DockDoubleClickMinimizeScope {
+        get {
+            DockDoubleClickMinimizeScope(
+                rawValue: defaults.string(forKey: "dockDoubleClickMinimizeScope") ?? ""
+            ) ?? .allWindows
+        }
+        set { set(newValue.rawValue, forKey: "dockDoubleClickMinimizeScope") }
     }
 
     var showMinimized: Bool {
@@ -150,6 +201,14 @@ final class WarpPreferences {
         )
     }
 
+    var dockPreviewFilterOptions: DockPreviewFilterOptions {
+        DockPreviewFilterOptions(
+            showMinimized: dockPreviewShowMinimized,
+            showHiddenApplications: dockPreviewShowHiddenApplications,
+            showFullscreen: dockPreviewShowFullscreen
+        )
+    }
+
     func exclude(bundleIdentifier: String) {
         var values = excludedBundleIdentifiers
         values.insert(bundleIdentifier)
@@ -170,6 +229,13 @@ final class WarpPreferences {
             "dockPreviewCloseEnabled": true,
             "quitAppWhenLastWindowClosed": false,
             "dockPreviewSize": DockPreviewSize.default.rawValue,
+            "dockPreviewShowMinimized": true,
+            "dockPreviewShowHiddenApplications": true,
+            "dockPreviewShowFullscreen": true,
+            "minimizeFrontmostWindowOnDockClick": true,
+            "chooseWindowOnMultiWindowDockClick": true,
+            "minimizeAllWindowsOnDockDoubleClick": true,
+            "dockDoubleClickMinimizeScope": DockDoubleClickMinimizeScope.allWindows.rawValue,
             "showMinimizedWindows": true,
             "showHiddenApplications": true,
             "showFullscreenWindows": true,
