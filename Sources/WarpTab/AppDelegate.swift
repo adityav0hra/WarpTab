@@ -5,15 +5,17 @@ import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let isBackgroundLaunch = CommandLine.arguments.contains("--background")
-    private let repository = WindowRepository()
+    private let preferences = WarpPreferences()
+    private lazy var store = WindowStore(preferences: preferences)
     private var configuredShortcut: SwitcherShortcut {
-        SwitcherShortcut(storageValue: UserDefaults.standard.string(forKey: "customShortcut") ?? "") ?? .defaultShortcut
+        let stored = SwitcherShortcut(storageValue: UserDefaults.standard.string(forKey: "customShortcut") ?? "")
+        return stored.map { $0.isReserved ? .defaultShortcut : $0 } ?? .defaultShortcut
     }
     private var configuredLayout: SwitcherLayout {
         SwitcherLayout(rawValue: UserDefaults.standard.string(forKey: "switcherLayout") ?? "") ?? .list
     }
     private lazy var switcher = SwitcherPanelController(
-        repository: repository,
+        store: store,
         shortcut: configuredShortcut,
         layout: configuredLayout
     )
@@ -31,14 +33,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onShortcutChange: { [weak self] shortcut in self?.setShortcut(shortcut) ?? false },
         onLayoutChange: { [weak self] layout in self?.setLayout(layout) },
         onOpenAccessibility: { [weak self] in self?.openAccessibilitySettings() },
+        onOpenWindowOptions: { [weak self] in self?.showWindowOptions() },
         onClose: { [weak self] in self?.settingsDidClose() }
     )
+    private lazy var windowOptions = WindowOptionsController(preferences: preferences, store: store)
     private var statusItem: NSStatusItem?
     private var shortcutMenuItem: NSMenuItem?
     private var listLayoutMenuItem: NSMenuItem?
     private var thumbnailLayoutMenuItem: NSMenuItem?
     private var permissionTimer: Timer?
-    private var titleRefreshTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.applicationIconImage = AppIcon.make()
@@ -50,13 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             requestAccessibilityPermission()
         }
-        repository.warmTitleCache()
+        store.start()
         ensureMonitorStarted()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.ensureMonitorStarted()
-        }
-        titleRefreshTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
-            self?.repository.warmTitleCache()
         }
         if !isBackgroundLaunch {
             showSettings()
@@ -65,8 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         permissionTimer?.invalidate()
-        titleRefreshTimer?.invalidate()
         monitor.stop()
+        store.stop()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -80,12 +80,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(_ event: ShortcutEvent) {
         switch event {
-        case .cycle(let backwards):
-            switcher.cycle(backwards: backwards)
+        case .cycle(let backwards, let scope):
+            switcher.cycle(backwards: backwards, scope: scope)
+        case .navigate(let direction):
+            switcher.navigate(direction)
+        case .searchCharacter(let character):
+            switcher.appendSearchCharacter(character)
+        case .deleteSearchCharacter:
+            switcher.deleteSearchCharacter()
+        case .action(let action):
+            switcher.perform(action)
         case .commit:
             switcher.commitSelection()
         case .cancel:
-            switcher.cancel()
+            switcher.handleEscape()
         }
     }
 
@@ -160,6 +168,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shortcutItem.isEnabled = false
         menu.addItem(shortcutItem)
         shortcutMenuItem = shortcutItem
+        let sameAppItem = NSMenuItem(
+            title: "Same app: \(SwitcherShortcut.sameApplicationShortcut.displayName)",
+            action: nil,
+            keyEquivalent: ""
+        )
+        sameAppItem.isEnabled = false
+        menu.addItem(sameAppItem)
 
         let viewStyleItem = NSMenuItem(title: "View Style", action: nil, keyEquivalent: "")
         let viewStyleMenu = NSMenu(title: "View Style")
@@ -276,6 +291,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ensureMonitorStarted()
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindow.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func showWindowOptions() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        windowOptions.showWindow(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        windowOptions.window?.makeKeyAndOrderFront(nil)
     }
 
     private func settingsDidClose() {

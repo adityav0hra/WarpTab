@@ -3,7 +3,11 @@ import Carbon.HIToolbox
 import CoreGraphics
 
 enum ShortcutEvent {
-    case cycle(backwards: Bool)
+    case cycle(backwards: Bool, scope: SwitcherWindowScope)
+    case navigate(SwitcherNavigation)
+    case searchCharacter(String)
+    case deleteSearchCharacter
+    case action(SelectedWindowAction)
     case commit
     case cancel
 }
@@ -17,6 +21,12 @@ struct SwitcherShortcut: Equatable {
         keyCode: UInt32(kVK_Tab),
         carbonModifiers: UInt32(optionKey),
         keyLabel: "Tab"
+    )
+
+    static let sameApplicationShortcut = SwitcherShortcut(
+        keyCode: UInt32(kVK_ANSI_Grave),
+        carbonModifiers: UInt32(optionKey),
+        keyLabel: "`"
     )
 
     var displayName: String {
@@ -109,23 +119,28 @@ struct SwitcherShortcut: Equatable {
     }
 
     var isReserved: Bool {
-        keyCode == UInt32(kVK_Tab) && carbonModifiers == UInt32(cmdKey)
+        (keyCode == UInt32(kVK_Tab) && carbonModifiers == UInt32(cmdKey)) ||
+            self == Self.sameApplicationShortcut
     }
 }
 
 final class ShortcutMonitor {
     private var hotKeyRef: EventHotKeyRef?
+    private var sameApplicationHotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerRef: EventHandlerRef?
     private var modifierEventTap: CFMachPort?
     private var modifierRunLoopSource: CFRunLoopSource?
     private var isCycling = false
+    private var activeShortcut: SwitcherShortcut?
+    private var activeScope: SwitcherWindowScope = .allWindows
     private var initialTabWasReleased = false
+    private var consumedKeyCodes: Set<UInt32> = []
     private(set) var shortcut: SwitcherShortcut
     private let handler: (ShortcutEvent) -> Void
 
     var isRunning: Bool {
         guard let modifierEventTap else { return false }
-        return hotKeyRef != nil && CGEvent.tapIsEnabled(tap: modifierEventTap)
+        return hotKeyRef != nil && sameApplicationHotKeyRef != nil && CGEvent.tapIsEnabled(tap: modifierEventTap)
     }
 
     init(shortcut: SwitcherShortcut, handler: @escaping (ShortcutEvent) -> Void) {
@@ -178,6 +193,19 @@ final class ShortcutMonitor {
             return false
         }
 
+        let sameApplicationIdentifier = EventHotKeyID(signature: 0x57525054, id: 2)
+        let sameApplicationStatus = RegisterEventHotKey(
+            SwitcherShortcut.sameApplicationShortcut.keyCode,
+            SwitcherShortcut.sameApplicationShortcut.carbonModifiers,
+            sameApplicationIdentifier,
+            GetApplicationEventTarget(), 0, &sameApplicationHotKeyRef
+        )
+        guard sameApplicationStatus == noErr else {
+            stop()
+            recordBackend("unavailable")
+            return false
+        }
+
         let mask = [CGEventType.flagsChanged, .keyDown, .keyUp].reduce(CGEventMask(0)) {
             $0 | (CGEventMask(1) << $1.rawValue)
         }
@@ -209,21 +237,29 @@ final class ShortcutMonitor {
         modifierRunLoopSource = nil
         modifierEventTap = nil
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        if let sameApplicationHotKeyRef { UnregisterEventHotKey(sameApplicationHotKeyRef) }
         if let hotKeyHandlerRef { RemoveEventHandler(hotKeyHandlerRef) }
         hotKeyRef = nil
+        sameApplicationHotKeyRef = nil
         hotKeyHandlerRef = nil
         isCycling = false
+        activeShortcut = nil
+        activeScope = .allWindows
         initialTabWasReleased = false
+        consumedKeyCodes.removeAll()
     }
 
-    fileprivate func processCarbonHotKey() {
+    fileprivate func processCarbonHotKey(scope: SwitcherWindowScope) {
         // Return from Carbon dispatch before asking WindowServer for its
         // window list; doing that synchronously here creates a circular wait.
         if !isCycling {
             isCycling = true
+            activeScope = scope
+            activeShortcut = scope == .allWindows ? shortcut : .sameApplicationShortcut
             initialTabWasReleased = false
             DispatchQueue.main.async { [weak self] in
-                self?.handler(.cycle(backwards: false))
+                guard let self else { return }
+                self.handler(.cycle(backwards: false, scope: self.activeScope))
             }
         }
     }
@@ -234,11 +270,12 @@ final class ShortcutMonitor {
         // distinguishable from Carbon's autorepeat press/release pairs.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
             guard let self, self.isCycling else { return }
-            let tabIsPhysicallyDown = CGEventSource.keyState(
+            guard let activeShortcut = self.activeShortcut else { return }
+            let shortcutKeyIsPhysicallyDown = CGEventSource.keyState(
                 .combinedSessionState,
-                key: CGKeyCode(self.shortcut.keyCode)
+                key: CGKeyCode(activeShortcut.keyCode)
             )
-            if !tabIsPhysicallyDown { self.initialTabWasReleased = true }
+            if !shortcutKeyIsPhysicallyDown { self.initialTabWasReleased = true }
         }
     }
 
@@ -248,9 +285,25 @@ final class ShortcutMonitor {
             return Unmanaged.passUnretained(event)
         }
 
-        if (type == .keyDown || type == .keyUp),
-           UInt32(event.getIntegerValueField(.keyboardEventKeycode)) == shortcut.keyCode,
+        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if type == .keyUp, consumedKeyCodes.remove(keyCode) != nil {
+            return nil
+        }
+
+        let invokedShortcut: (shortcut: SwitcherShortcut, scope: SwitcherWindowScope)?
+        if keyCode == shortcut.keyCode,
            event.flags.contains(shortcut.eventModifierFlag) {
+            invokedShortcut = (shortcut, .allWindows)
+        } else if keyCode == SwitcherShortcut.sameApplicationShortcut.keyCode,
+                  event.flags.contains(SwitcherShortcut.sameApplicationShortcut.eventModifierFlag) {
+            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            invokedShortcut = pid.map { (SwitcherShortcut.sameApplicationShortcut, .application($0)) }
+        } else {
+            invokedShortcut = nil
+        }
+
+        if (type == .keyDown || type == .keyUp), let invokedShortcut {
             if !isCycling {
                 // Begin on the first physical key-down. Waiting for Carbon's
                 // application-event delivery can make the initial press only
@@ -258,16 +311,23 @@ final class ShortcutMonitor {
                 // Tab press. Carbon remains registered as a fallback.
                 guard type == .keyDown else { return Unmanaged.passUnretained(event) }
                 isCycling = true
+                activeShortcut = invokedShortcut.shortcut
+                activeScope = invokedShortcut.scope
                 initialTabWasReleased = false
                 let backwards = event.flags.contains(.maskShift) &&
-                    !shortcut.eventModifierFlag.contains(.maskShift)
-                DispatchQueue.main.async { [handler] in handler(.cycle(backwards: backwards)) }
+                    !invokedShortcut.shortcut.eventModifierFlag.contains(.maskShift)
+                DispatchQueue.main.async { [handler] in
+                    handler(.cycle(backwards: backwards, scope: invokedShortcut.scope))
+                }
+            } else if keyCode != activeShortcut?.keyCode {
+                return Unmanaged.passUnretained(event)
             } else if type == .keyUp {
                 initialTabWasReleased = true
-            } else if initialTabWasReleased {
+            } else if initialTabWasReleased || event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
                 let backwards = event.flags.contains(.maskShift) &&
-                    !shortcut.eventModifierFlag.contains(.maskShift)
-                DispatchQueue.main.async { [handler] in handler(.cycle(backwards: backwards)) }
+                    !invokedShortcut.shortcut.eventModifierFlag.contains(.maskShift)
+                let scope = activeScope
+                DispatchQueue.main.async { [handler] in handler(.cycle(backwards: backwards, scope: scope)) }
             }
             // Carbon owns the first shortcut press. Once the switcher is open,
             // consume this key here so both discrete presses and macOS key
@@ -275,9 +335,54 @@ final class ShortcutMonitor {
             return nil
         }
 
-        if type == .flagsChanged, isCycling, !event.flags.contains(shortcut.eventModifierFlag) {
+        if type == .keyDown, isCycling {
+            let commandDown = event.flags.contains(.maskCommand)
+            let controlDown = event.flags.contains(.maskControl)
+            let dispatched: ShortcutEvent?
+            switch Int(keyCode) {
+            case kVK_Escape:
+                dispatched = .cancel
+            case kVK_Return, kVK_ANSI_KeypadEnter:
+                dispatched = .commit
+                isCycling = false
+                activeShortcut = nil
+                activeScope = .allWindows
+                initialTabWasReleased = false
+            case kVK_LeftArrow: dispatched = .navigate(.left)
+            case kVK_RightArrow: dispatched = .navigate(.right)
+            case kVK_UpArrow: dispatched = .navigate(.up)
+            case kVK_DownArrow: dispatched = .navigate(.down)
+            case kVK_Delete, kVK_ForwardDelete: dispatched = .deleteSearchCharacter
+            case kVK_ANSI_W where commandDown: dispatched = .action(.close)
+            case kVK_ANSI_M where commandDown: dispatched = .action(.minimize)
+            case kVK_ANSI_H where commandDown: dispatched = .action(.hideApplication)
+            default:
+                if !commandDown, !controlDown,
+                   let characters = NSEvent(cgEvent: event)?.charactersIgnoringModifiers,
+                   characters.count == 1,
+                   let scalar = characters.unicodeScalars.first,
+                   !CharacterSet.controlCharacters.contains(scalar) {
+                    dispatched = .searchCharacter(characters)
+                } else {
+                    dispatched = nil
+                }
+            }
+            if let dispatched {
+                consumedKeyCodes.insert(keyCode)
+                DispatchQueue.main.async { [handler] in handler(dispatched) }
+                return nil
+            }
+        }
+
+        if type == .flagsChanged,
+           isCycling,
+           let activeShortcut,
+           !event.flags.contains(activeShortcut.eventModifierFlag) {
             isCycling = false
+            self.activeShortcut = nil
+            activeScope = .allWindows
             initialTabWasReleased = false
+            consumedKeyCodes.removeAll()
             DispatchQueue.main.async { [handler] in handler(.commit) }
         }
         return Unmanaged.passUnretained(event)
@@ -306,10 +411,28 @@ private func warpTabEventHandler(
 ) -> OSStatus {
     guard let userData, let event else { return OSStatus(eventNotHandledErr) }
     let monitor = Unmanaged<ShortcutMonitor>.fromOpaque(userData).takeUnretainedValue()
+    var identifier = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &identifier
+    )
+    guard status == noErr else { return status }
     if GetEventKind(event) == UInt32(kEventHotKeyReleased) {
         monitor.processCarbonHotKeyReleased()
     } else {
-        monitor.processCarbonHotKey()
+        let scope: SwitcherWindowScope
+        if identifier.id == 2,
+           let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            scope = .application(pid)
+        } else {
+            scope = .allWindows
+        }
+        monitor.processCarbonHotKey(scope: scope)
     }
     return noErr
 }

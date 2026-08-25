@@ -7,6 +7,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onShortcutChange: (SwitcherShortcut) -> Bool
     private let onLayoutChange: (SwitcherLayout) -> Void
     private let onOpenAccessibility: () -> Void
+    private let onOpenWindowOptions: () -> Void
     private let onClose: () -> Void
 
     private let enabledSwitch = NSSwitch()
@@ -30,17 +31,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         onShortcutChange: @escaping (SwitcherShortcut) -> Bool,
         onLayoutChange: @escaping (SwitcherLayout) -> Void,
         onOpenAccessibility: @escaping () -> Void,
+        onOpenWindowOptions: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.onEnabledChange = onEnabledChange
         self.onShortcutChange = onShortcutChange
         self.onLayoutChange = onLayoutChange
         self.onOpenAccessibility = onOpenAccessibility
+        self.onOpenWindowOptions = onOpenWindowOptions
         self.onClose = onClose
         self.shortcutRecorder = ShortcutRecorderButton(shortcut: initiallySelectedShortcut)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 570),
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 630),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -102,7 +105,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 740, height: 550)
+        window.minSize = NSSize(width: 740, height: 610)
         window.maxSize = NSSize(width: 920, height: 700)
         window.isReleasedWhenClosed = false
         window.center()
@@ -230,7 +233,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             description: "Shortcut used to open WarpTab.",
             accessory: shortcutRecorder
         )
-        let rows = NSStackView(views: [enabledRow, insetSeparator(), shortcutRow])
+        let sameAppShortcut = NSTextField(labelWithString: SwitcherShortcut.sameApplicationShortcut.displayName)
+        sameAppShortcut.font = .monospacedSystemFont(ofSize: 12.5, weight: .semibold)
+        sameAppShortcut.textColor = .secondaryLabelColor
+        sameAppShortcut.setAccessibilityLabel("Same-application shortcut \(SwitcherShortcut.sameApplicationShortcut.displayName)")
+        let sameAppRow = makeSettingRow(
+            title: "Same Application",
+            description: "Switch between windows of the current application.",
+            accessory: sameAppShortcut
+        )
+        let optionsButton = NSButton(title: "Window & Display Options…", target: self, action: #selector(openWindowOptions))
+        optionsButton.bezelStyle = .rounded
+        optionsButton.controlSize = .small
+        optionsButton.setAccessibilityLabel("Open window and display options")
+        let optionsRow = makeSettingRow(
+            title: "Window Options",
+            description: "Choose which windows appear and where the switcher opens.",
+            accessory: optionsButton
+        )
+        let rows = NSStackView(views: [
+            enabledRow, insetSeparator(), shortcutRow, insetSeparator(),
+            sameAppRow, insetSeparator(), optionsRow
+        ])
         rows.orientation = .vertical
         rows.alignment = .width
         rows.spacing = 0
@@ -405,6 +429,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func openAccessibility() {
         onOpenAccessibility()
+    }
+
+    @objc private func openWindowOptions() {
+        onOpenWindowOptions()
     }
 }
 

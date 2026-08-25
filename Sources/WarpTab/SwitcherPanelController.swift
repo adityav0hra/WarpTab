@@ -12,18 +12,39 @@ enum SwitcherLayout: String, CaseIterable {
     }
 }
 
+enum SwitcherNavigation {
+    case previous
+    case next
+    case left
+    case right
+    case up
+    case down
+}
+
+enum SelectedWindowAction {
+    case close
+    case minimize
+    case hideApplication
+}
+
 final class SwitcherPanelController: NSWindowController {
-    private let repository: WindowRepository
-    private var windows: [SwitchableWindow] = []
+    private let store: WindowStore
+    private let previewCache = PreviewCache()
+    private var windows: [WarpWindow] = []
+    private var unfilteredWindows: [WarpWindow] = []
     private var rows: [WindowRowView] = []
     private var selectedIndex = 0
-    private let stack = NSStackView()
+    private let stack = FlippedStackView()
     private let scrollView = NSScrollView()
+    private let searchContainer = NSView()
+    private let searchLabel = NSTextField(labelWithString: "")
+    private var searchText = ""
+    private var windowScope: SwitcherWindowScope = .allWindows
     private var shortcut: SwitcherShortcut
     private var layout: SwitcherLayout
 
-    init(repository: WindowRepository, shortcut: SwitcherShortcut, layout: SwitcherLayout) {
-        self.repository = repository
+    init(store: WindowStore, shortcut: SwitcherShortcut, layout: SwitcherLayout) {
+        self.store = store
         self.shortcut = shortcut
         self.layout = layout
         let panel = NSPanel(
@@ -34,7 +55,10 @@ final class SwitcherPanelController: NSWindowController {
         )
         super.init(window: panel)
         configurePanel(panel)
-        repository.onTitlesUpdated = { [weak self] in self?.refreshVisibleRows() }
+        store.onChange = { [weak self] in self?.refreshVisibleRows() }
+        store.onPreviewInvalidation = { [weak self] identity in
+            self?.previewCache.invalidate(identity)
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -50,29 +74,87 @@ final class SwitcherPanelController: NSWindowController {
         showPanel()
     }
 
-    func cycle(backwards: Bool) {
+    func cycle(backwards: Bool, scope: SwitcherWindowScope = .allWindows) {
         if !isVisible {
-            windows = repository.currentWindows()
-            guard !windows.isEmpty else { return }
-            selectedIndex = windows.count > 1 && windows.first?.isCurrent == true ? 1 : 0
+            windowScope = scope
+            store.beginSwitching()
+            searchText = ""
+            refreshCandidates()
+            applySearch(rebuild: false)
+            guard !windows.isEmpty else {
+                store.cancelSwitching()
+                return
+            }
+            selectedIndex = SwitcherSequence.initialSelectionIndex(
+                windowCount: windows.count,
+                backwards: backwards
+            ) ?? 0
             rebuildRows()
-            showPanel()
+            showPanel(resetScrollPosition: true)
         } else {
+            guard !windows.isEmpty else { return }
             let delta = backwards ? -1 : 1
             selectedIndex = (selectedIndex + delta + windows.count) % windows.count
             updateSelection()
         }
     }
 
+    func navigate(_ navigation: SwitcherNavigation) {
+        guard isVisible, !windows.isEmpty else { return }
+        let columns = layout == .thumbnails ? 4 : 1
+        let delta: Int
+        switch navigation {
+        case .previous, .left: delta = -1
+        case .next, .right: delta = 1
+        case .up: delta = -columns
+        case .down: delta = columns
+        }
+        selectedIndex = (selectedIndex + delta + windows.count * 2) % windows.count
+        updateSelection()
+    }
+
+    func appendSearchCharacter(_ character: String) {
+        guard isVisible, store.preferences.searchEnabled else { return }
+        searchText.append(contentsOf: character)
+        applySearch()
+    }
+
+    func deleteSearchCharacter() {
+        guard isVisible, !searchText.isEmpty else { return }
+        searchText.removeLast()
+        applySearch()
+    }
+
+    func handleEscape() {
+        guard isVisible else { return }
+        cancel()
+    }
+
+    func perform(_ action: SelectedWindowAction) {
+        guard isVisible, windows.indices.contains(selectedIndex) else { return }
+        let selected = windows[selectedIndex]
+        switch action {
+        case .close: store.activator.close(selected)
+        case .minimize: store.activator.minimize(selected)
+        case .hideApplication: store.activator.hideApplication(selected)
+        }
+        store.requestRefresh()
+    }
+
     func commitSelection() {
         guard isVisible, windows.indices.contains(selectedIndex) else { return }
         let selection = windows[selectedIndex]
         window?.orderOut(nil)
-        repository.focus(selection)
+        searchText = ""
+        windowScope = .allWindows
+        store.commit(selection)
     }
 
     func cancel() {
         window?.orderOut(nil)
+        searchText = ""
+        windowScope = .allWindows
+        store.cancelSwitching()
     }
 
     private var isVisible: Bool { window?.isVisible == true }
@@ -105,7 +187,7 @@ final class SwitcherPanelController: NSWindowController {
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let document = NSView()
+        let document = SwitcherDocumentView()
         document.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(stack)
         // Attach the document before activating a constraint that references
@@ -120,18 +202,40 @@ final class SwitcherPanelController: NSWindowController {
             document.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor)
         ])
 
+        searchContainer.wantsLayer = true
+        searchContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.48).cgColor
+        searchContainer.layer?.cornerRadius = 8
+        searchContainer.translatesAutoresizingMaskIntoConstraints = false
+        searchLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        searchLabel.textColor = .labelColor
+        searchLabel.lineBreakMode = .byTruncatingTail
+        searchLabel.translatesAutoresizingMaskIntoConstraints = false
+        searchContainer.addSubview(searchLabel)
+        NSLayoutConstraint.activate([
+            searchLabel.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 10),
+            searchLabel.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -10),
+            searchLabel.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+            searchContainer.heightAnchor.constraint(equalToConstant: 28)
+        ])
+
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.scrollerStyle = .overlay
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        effect.addSubview(scrollView)
+        let contentStack = NSStackView(views: [searchContainer, scrollView])
+        contentStack.orientation = .vertical
+        contentStack.alignment = .width
+        contentStack.spacing = 7
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        effect.addSubview(contentStack)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: effect.topAnchor, constant: 9),
-            scrollView.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 9),
-            scrollView.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -9),
-            scrollView.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -9)
+            contentStack.topAnchor.constraint(equalTo: effect.topAnchor, constant: 9),
+            contentStack.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 9),
+            contentStack.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -9),
+            contentStack.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -9)
         ])
+        searchContainer.isHidden = true
     }
 
     private func rebuildRows() {
@@ -141,7 +245,11 @@ final class SwitcherPanelController: NSWindowController {
                 window: item,
                 number: index + 1,
                 layout: layout,
-                thumbnail: layout == .thumbnails ? repository.thumbnail(for: item) : nil
+                thumbnail: layout == .thumbnails && store.preferences.previewsEnabled
+                    ? previewCache.image(for: item) { [weak self] identity, image in
+                        self?.refreshThumbnail(identity: identity, image: image)
+                    }
+                    : nil
             )
             row.onClick = { [weak self] in
                 guard let self else { return }
@@ -194,44 +302,108 @@ final class SwitcherPanelController: NSWindowController {
 
     private func refreshVisibleRows() {
         guard isVisible else { return }
-        let previousIndex = selectedIndex
-        windows = repository.currentWindows(refreshTitles: false)
+        let selectedIdentity = windows.indices.contains(selectedIndex) ? windows[selectedIndex].identity : nil
+        refreshCandidates()
+        applySearch(rebuild: false)
         guard !windows.isEmpty else {
             cancel()
             return
         }
-        selectedIndex = min(previousIndex, windows.count - 1)
+        selectedIndex = selectedIdentity.flatMap { identity in
+            windows.firstIndex(where: { $0.identity == identity })
+        } ?? min(selectedIndex, windows.count - 1)
         rebuildRows()
         showPanel()
     }
 
-    private func updateSelection() {
+    private func refreshCandidates() {
+        let screen = targetScreen()
+        unfilteredWindows = store.switchableWindows(on: screen?.warpIdentifier).filter {
+            windowScope.includes(processIdentifier: $0.application.processIdentifier)
+        }
+        windows = unfilteredWindows
+        previewCache.retainOnly(Set(unfilteredWindows.map(\.identity)))
+    }
+
+    private func applySearch(rebuild: Bool = true) {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchContainer.isHidden = query.isEmpty
+        searchLabel.stringValue = query.isEmpty ? "" : "Search  \(query)"
+        if query.isEmpty {
+            windows = unfilteredWindows
+        } else {
+            windows = WindowSearch.results(for: query, in: unfilteredWindows)
+        }
+        selectedIndex = windows.isEmpty
+            ? 0
+            : (query.isEmpty ? min(selectedIndex, windows.count - 1) : 0)
+        if rebuild {
+            rebuildRows()
+            showPanel()
+        }
+    }
+
+    private func refreshThumbnail(identity: String, image: NSImage?) {
+        guard isVisible,
+              let index = windows.firstIndex(where: { $0.identity == identity }),
+              rows.indices.contains(index) else { return }
+        rows[index].updateThumbnail(image)
+    }
+
+    private func updateSelection(scrollSelectedIntoView: Bool = true) {
         for (index, row) in rows.enumerated() { row.isSelected = index == selectedIndex }
-        if rows.indices.contains(selectedIndex) {
+        if scrollSelectedIntoView, rows.indices.contains(selectedIndex) {
             rows[selectedIndex].scrollToVisible(rows[selectedIndex].bounds)
         }
     }
 
-    private func showPanel() {
+    private func showPanel(resetScrollPosition: Bool = false) {
         guard let panel = window else { return }
 
+        let searchHeight: CGFloat = searchText.isEmpty ? 0 : 35
         if layout == .list {
             let visibleCount = min(windows.count, 8)
-            let height = CGFloat(18 + visibleCount * 43)
+            let height = CGFloat(18 + visibleCount * 43) + searchHeight
             panel.setContentSize(NSSize(width: 480, height: height))
         } else {
             let rowCount = Int(ceil(Double(windows.count) / 4.0))
             let visibleRows = min(max(rowCount, 1), 3)
-            panel.setContentSize(NSSize(width: 820, height: CGFloat(18 + visibleRows * 144)))
+            panel.setContentSize(NSSize(width: 820, height: CGFloat(18 + visibleRows * 144) + searchHeight))
         }
 
-        if let frame = NSScreen.main?.visibleFrame {
+        if let frame = targetScreen()?.visibleFrame ?? NSScreen.main?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: frame.midX - panel.frame.width / 2, y: frame.midY - panel.frame.height / 2))
         }
         panel.orderFrontRegardless()
         panel.contentView?.layoutSubtreeIfNeeded()
-        updateSelection()
+        if resetScrollPosition {
+            let clipView = scrollView.contentView
+            clipView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(clipView)
+        }
+        updateSelection(scrollSelectedIntoView: !resetScrollPosition)
     }
+
+    private func targetScreen() -> NSScreen? {
+        switch store.preferences.screenPlacement {
+        case .mainDisplay:
+            return NSScreen.main
+        case .mousePointer:
+            let point = NSEvent.mouseLocation
+            return NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main
+        case .activeWindow:
+            let screenID = store.allWindows().first(where: \.isFocused)?.screenIdentifier
+            return NSScreen.screens.first { $0.warpIdentifier == screenID } ?? NSScreen.main
+        }
+    }
+}
+
+private final class SwitcherDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+private final class FlippedStackView: NSStackView {
+    override var isFlipped: Bool { true }
 }
 
 private final class WindowRowView: NSView {
@@ -239,7 +411,7 @@ private final class WindowRowView: NSView {
     var onClick: (() -> Void)?
 
     init(
-        window: SwitchableWindow,
+        window: WarpWindow,
         number: Int,
         layout: SwitcherLayout,
         thumbnail: NSImage?
@@ -267,7 +439,13 @@ private final class WindowRowView: NSView {
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let subtitleText = window.isMinimized ? "\(window.appName)  ·  Minimized" : window.appName
+        let states = [
+            window.isMinimized ? "Minimized" : nil,
+            window.isHidden ? "Hidden" : nil,
+            window.isFullscreen ? "Fullscreen" : nil,
+            window.isWindowlessApplication ? "No open windows" : nil
+        ].compactMap { $0 }
+        let subtitleText = states.isEmpty ? window.appName : "\(window.appName)  ·  \(states.joined(separator: " · "))"
         let subtitle = NSTextField(labelWithString: subtitleText)
         subtitle.font = .systemFont(ofSize: 9.5, weight: .regular)
         subtitle.textColor = .secondaryLabelColor
@@ -308,7 +486,18 @@ private final class WindowRowView: NSView {
         updateAppearance()
     }
 
-    private func configureThumbnail(window: SwitchableWindow, number: Int, thumbnail: NSImage?) {
+    private var thumbnailImageView: NSImageView?
+    private var thumbnailPlaceholderView: NSImageView?
+    private var fallbackIcon: NSImage?
+
+    func updateThumbnail(_ image: NSImage?) {
+        guard let imageView = thumbnailImageView, let fallbackIcon else { return }
+        imageView.image = image
+        thumbnailPlaceholderView?.image = fallbackIcon
+        thumbnailPlaceholderView?.isHidden = image != nil
+    }
+
+    private func configureThumbnail(window: WarpWindow, number: Int, thumbnail: NSImage?) {
         let preview = NSView()
         preview.wantsLayer = true
         preview.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.38).cgColor
@@ -317,7 +506,10 @@ private final class WindowRowView: NSView {
         preview.layer?.masksToBounds = true
         preview.translatesAutoresizingMaskIntoConstraints = false
 
-        let previewImage = NSImageView(image: thumbnail ?? window.icon)
+        let previewImage = NSImageView(frame: .zero)
+        previewImage.image = thumbnail
+        thumbnailImageView = previewImage
+        fallbackIcon = window.icon
         previewImage.imageScaling = .scaleProportionallyUpOrDown
         previewImage.translatesAutoresizingMaskIntoConstraints = false
         previewImage.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -325,6 +517,13 @@ private final class WindowRowView: NSView {
         previewImage.setContentHuggingPriority(.defaultLow, for: .horizontal)
         previewImage.setContentHuggingPriority(.defaultLow, for: .vertical)
         preview.addSubview(previewImage)
+
+        let placeholder = NSImageView(image: window.icon)
+        thumbnailPlaceholderView = placeholder
+        placeholder.imageScaling = .scaleProportionallyUpOrDown
+        placeholder.isHidden = thumbnail != nil
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+        preview.addSubview(placeholder)
 
         let appIcon = NSImageView(image: window.icon)
         appIcon.imageScaling = .scaleProportionallyUpOrDown
@@ -362,12 +561,12 @@ private final class WindowRowView: NSView {
             previewImage.centerYAnchor.constraint(equalTo: preview.centerYAnchor),
             previewImage.widthAnchor.constraint(lessThanOrEqualTo: preview.widthAnchor),
             previewImage.heightAnchor.constraint(lessThanOrEqualTo: preview.heightAnchor),
-            thumbnail == nil
-                ? previewImage.widthAnchor.constraint(equalToConstant: 48)
-                : previewImage.widthAnchor.constraint(equalTo: preview.widthAnchor),
-            thumbnail == nil
-                ? previewImage.heightAnchor.constraint(equalToConstant: 48)
-                : previewImage.heightAnchor.constraint(equalTo: preview.heightAnchor),
+            previewImage.widthAnchor.constraint(equalTo: preview.widthAnchor),
+            previewImage.heightAnchor.constraint(equalTo: preview.heightAnchor),
+            placeholder.centerXAnchor.constraint(equalTo: preview.centerXAnchor),
+            placeholder.centerYAnchor.constraint(equalTo: preview.centerYAnchor),
+            placeholder.widthAnchor.constraint(equalToConstant: 48),
+            placeholder.heightAnchor.constraint(equalToConstant: 48),
             appIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             appIcon.topAnchor.constraint(equalTo: preview.bottomAnchor, constant: 8),
             appIcon.widthAnchor.constraint(equalToConstant: 17),
