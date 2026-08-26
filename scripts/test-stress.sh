@@ -10,7 +10,7 @@ defaults export com.warptab.app "$PREFERENCES_BACKUP" >/dev/null
 
 cleanup() {
   pkill -x WarpTabFixture 2>/dev/null || true
-  osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+  pkill -x WarpTab 2>/dev/null || true
   defaults import com.warptab.app "$PREFERENCES_BACKUP" >/dev/null
   rm -f "$PREFERENCES_BACKUP"
   open -n /Applications/WarpTab.app --args --background
@@ -37,7 +37,7 @@ swiftc \
 
 for count in 5 20 50 100; do
   pkill -x WarpTabFixture 2>/dev/null || true
-  osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+  pkill -x WarpTab 2>/dev/null || true
   open -n "$fixture_app" --args --stress "$count"
   sleep 1
   open -n /Applications/WarpTab.app --args --background

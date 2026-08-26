@@ -193,6 +193,15 @@ private func testPreferences() throws {
     try expect(preferences.showOtherSpaces, "Other-Spaces default")
     try expect(!preferences.showWindowlessApps, "Windowless default")
     try expect(preferences.displayScope == .allDisplays, "Display scope default")
+    try expect(preferences.dockAppShortcutsEnabled, "Dock app shortcuts default")
+    try expect(preferences.windowSnappingEnabled, "Window snapping default")
+    try expect(preferences.activateWindowBehindAfterSnapMinimize, "Activate-behind snapping default")
+    try expect(preferences.snapUpRestoresLastMinimizedWindow, "Up-restores-minimized snapping default")
+    try expect(preferences.snapMinimizeFocusBehavior == .activateWindowBehind, "Minimize focus choice default")
+    try expect(preferences.snapUpAfterMinimizeBehavior == .restoreMinimizedWindow, "Up-after-minimize choice default")
+    try expect(preferences.windowSnapMoveAcrossDisplays, "Cross-display snapping default")
+    try expect(preferences.windowSnapAssistEnabled, "Snap Assist default")
+    try expect(preferences.snapAssistLayout == .thumbnails, "Snap Assist layout default")
     var changes = 0
     preferences.onChange = { changes += 1 }
     preferences.showHiddenApplications = false
@@ -208,6 +217,13 @@ private func testPreferences() throws {
     preferences.minimizeAllWindowsOnDockDoubleClick = false
     preferences.dockDoubleClickMinimizeScope = .topWindow
     preferences.displayScope = .currentDisplay
+    preferences.dockAppShortcutsEnabled = false
+    preferences.windowSnappingEnabled = false
+    preferences.activateWindowBehindAfterSnapMinimize = false
+    preferences.snapUpRestoresLastMinimizedWindow = false
+    preferences.windowSnapMoveAcrossDisplays = false
+    preferences.windowSnapAssistEnabled = false
+    preferences.snapAssistLayout = .list
     preferences.excludedBundleIdentifiers = ["test.excluded"]
     try expect(!preferences.showHiddenApplications, "Preference persistence")
     try expect(!preferences.dockPreviewsEnabled, "Dock preview preference persistence")
@@ -222,8 +238,17 @@ private func testPreferences() throws {
     try expect(!preferences.minimizeAllWindowsOnDockDoubleClick, "Dock double-click minimize-all preference persistence")
     try expect(preferences.dockDoubleClickMinimizeScope == .topWindow, "Dock double-click scope persistence")
     try expect(preferences.displayScope == .currentDisplay, "Display preference persistence")
+    try expect(!preferences.dockAppShortcutsEnabled, "Dock app shortcuts preference persistence")
+    try expect(!preferences.windowSnappingEnabled, "Window snapping preference persistence")
+    try expect(!preferences.activateWindowBehindAfterSnapMinimize, "Activate-behind snapping preference persistence")
+    try expect(!preferences.snapUpRestoresLastMinimizedWindow, "Up-restores-minimized snapping preference persistence")
+    try expect(preferences.snapMinimizeFocusBehavior == .systemDefault, "Minimize focus choice persistence")
+    try expect(preferences.snapUpAfterMinimizeBehavior == .controlActiveWindow, "Up-after-minimize choice persistence")
+    try expect(!preferences.windowSnapMoveAcrossDisplays, "Cross-display snapping preference persistence")
+    try expect(!preferences.windowSnapAssistEnabled, "Snap Assist preference persistence")
+    try expect(preferences.snapAssistLayout == .list, "Snap Assist layout persistence")
     try expect(preferences.excludedBundleIdentifiers == ["test.excluded"], "Exclusion persistence")
-    try expect(changes == 14, "Preference change notifications")
+    try expect(changes == 21, "Preference change notifications")
 }
 
 private func testNativeTabSafety() throws {
@@ -242,6 +267,62 @@ private func testHardwareMainDisplayResolution() throws {
     )
 }
 
+private func testWindowSnapStateMachine() throws {
+    func result(_ state: SnapState, _ direction: SnapDirection, adjacent: Bool = false) -> SnapTransitionResult {
+        SnapStateMachine.transition(from: state, direction: direction, hasAdjacentDisplay: adjacent)
+    }
+
+    try expect(result(.floating, .left).action == .place(.leftHalf), "Floating snaps left")
+    try expect(result(.floating, .right).action == .place(.rightHalf), "Floating snaps right")
+    try expect(result(.floating, .up).action == .place(.maximized), "Floating maximizes")
+    try expect(result(.floating, .down).action == .minimize, "Floating minimizes")
+    try expect(result(.leftHalf, .right).action == .place(.rightHalf), "Left half moves right")
+    try expect(result(.leftHalf, .up).action == .place(.topLeft), "Left half moves top-left")
+    try expect(result(.leftHalf, .down).action == .place(.bottomLeft), "Left half moves bottom-left")
+    try expect(result(.rightHalf, .left).action == .place(.leftHalf), "Right half moves left")
+    try expect(result(.rightHalf, .up).action == .place(.topRight), "Right half moves top-right")
+    try expect(result(.rightHalf, .down).action == .place(.bottomRight), "Right half moves bottom-right")
+    try expect(result(.topLeft, .right).action == .place(.topRight), "Top-left moves right")
+    try expect(result(.topLeft, .down).action == .place(.bottomLeft), "Top-left moves down")
+    try expect(result(.bottomLeft, .right).action == .place(.bottomRight), "Bottom-left moves right")
+    try expect(result(.bottomLeft, .up).action == .place(.topLeft), "Bottom-left moves up")
+    try expect(result(.topRight, .left).action == .place(.topLeft), "Top-right moves left")
+    try expect(result(.topRight, .down).action == .place(.bottomRight), "Top-right moves down")
+    try expect(result(.bottomRight, .left).action == .place(.bottomLeft), "Bottom-right moves left")
+    try expect(result(.bottomRight, .up).action == .place(.topRight), "Bottom-right moves up")
+    try expect(result(.maximized, .down).action == .restore, "Maximized restores on Down")
+    try expect(result(.leftHalf, .left, adjacent: true) == SnapTransitionResult(action: .place(.rightHalf), movesToAdjacentDisplay: true), "Repeated Left crosses displays")
+    try expect(result(.rightHalf, .right, adjacent: true) == SnapTransitionResult(action: .place(.leftHalf), movesToAdjacentDisplay: true), "Repeated Right crosses displays")
+    try expect(result(.maximized, .up, adjacent: true).movesToAdjacentDisplay, "Repeated Up crosses vertically stacked displays")
+    try expect(result(.bottomLeft, .down, adjacent: true) == SnapTransitionResult(action: .place(.topLeft), movesToAdjacentDisplay: true), "Repeated Down crosses vertically stacked displays")
+}
+
+private func testWindowSnapGeometry() throws {
+    let workArea = CGRect(x: -1600, y: 24, width: 1600, height: 876)
+    let topLeft = CGRect(x: -1600, y: 24, width: 800, height: 438)
+    let bottomRight = CGRect(x: -800, y: 462, width: 800, height: 438)
+    try expect(SnapGeometry.frame(for: .topLeft, in: workArea) == topLeft, "Top-left work-area geometry")
+    try expect(SnapGeometry.frame(for: .bottomRight, in: workArea) == bottomRight, "Bottom-right work-area geometry")
+    try expect(SnapGeometry.frame(for: .maximized, in: workArea) == workArea, "Maximize uses visible work area")
+    try expect(SnapGeometry.recognizedState(for: topLeft.offsetBy(dx: 3, dy: -2), in: workArea) == .topLeft, "Geometry recognition tolerates AX drift")
+    try expect(SnapGeometry.recognizedState(for: CGRect(x: -1400, y: 100, width: 900, height: 600), in: workArea) == .floating, "Manual frames recover floating state")
+
+    let left = DisplaySnapshot(identifier: "left", frame: CGRect(x: -1920, y: 100, width: 1920, height: 1080), visibleFrame: .zero, scale: 1)
+    let center = DisplaySnapshot(identifier: "center", frame: CGRect(x: 0, y: 0, width: 2560, height: 1440), visibleFrame: .zero, scale: 2)
+    let upperRight = DisplaySnapshot(identifier: "upper-right", frame: CGRect(x: 2560, y: -900, width: 1440, height: 900), visibleFrame: .zero, scale: 2)
+    let lower = DisplaySnapshot(identifier: "lower", frame: CGRect(x: 400, y: 1440, width: 1920, height: 1080), visibleFrame: .zero, scale: 1)
+    let screens = [upperRight, lower, center, left]
+    try expect(ScreenSpatialGeometry.adjacentScreen(to: center, direction: .left, screens: screens)?.identifier == "left", "Left display found from coordinates")
+    try expect(ScreenSpatialGeometry.adjacentScreen(to: center, direction: .right, screens: screens)?.identifier == "upper-right", "Diagonal right display found from coordinates")
+    try expect(ScreenSpatialGeometry.adjacentScreen(to: center, direction: .down, screens: screens)?.identifier == "lower", "Lower display found from coordinates")
+    try expect(ScreenSpatialGeometry.screenContainingLargestArea(of: CGRect(x: -200, y: 200, width: 600, height: 600), screens: screens)?.identifier == "center", "Current display uses largest intersection")
+
+    let appKitAbovePrimary = CGRect(x: -1200, y: 1440, width: 1200, height: 900)
+    let accessibilityAbovePrimary = CGRect(x: -1200, y: -900, width: 1200, height: 900)
+    try expect(ScreenCoordinateGeometry.appKitToAccessibility(appKitAbovePrimary, primaryTop: 1440) == accessibilityAbovePrimary, "AppKit converts to AX coordinates above primary")
+    try expect(ScreenCoordinateGeometry.accessibilityToAppKit(accessibilityAbovePrimary, primaryTop: 1440) == appKitAbovePrimary, "AX coordinate conversion round-trips")
+}
+
 do {
     try testMRU()
     try testSearch()
@@ -249,6 +330,8 @@ do {
     try testPreferences()
     try testNativeTabSafety()
     try testHardwareMainDisplayResolution()
+    try testWindowSnapStateMachine()
+    try testWindowSnapGeometry()
     print("WarpTab engine tests passed: \(passed) assertions")
 } catch {
     fputs("WarpTab engine tests failed: \(error)\n", stderr)

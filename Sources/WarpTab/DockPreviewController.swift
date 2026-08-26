@@ -486,6 +486,7 @@ final class DockPreviewController: NSWindowController {
     private func close(_ item: WarpWindow) {
         let bundleIdentifier = item.bundleIdentifier
         let processIdentifier = item.application.processIdentifier
+        let previousFocus = store.activator.captureFocus()
         let wasLastWindow = bundleIdentifier.map {
             store.dockPreviewWindows(bundleIdentifier: $0)
                 .filter { $0.application.processIdentifier == processIdentifier }
@@ -494,6 +495,21 @@ final class DockPreviewController: NSWindowController {
 
         store.activator.close(item)
         store.requestRefresh(immediate: true)
+
+        // Pressing a background window's AX close button can make that app's
+        // next window key. Put the user back exactly where they were instead of
+        // allowing the remaining sibling windows to come forward.
+        if let previousFocus,
+           previousFocus.application.processIdentifier != processIdentifier {
+            for delay in [0.06, 0.24] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self else { return }
+                    if NSWorkspace.shared.frontmostApplication?.processIdentifier != previousFocus.application.processIdentifier || delay < 0.1 {
+                        store.activator.restoreFocus(previousFocus)
+                    }
+                }
+            }
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }

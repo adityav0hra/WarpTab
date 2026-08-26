@@ -2,6 +2,11 @@ import AppKit
 import ApplicationServices
 
 final class WindowActivator {
+    struct FocusSnapshot {
+        let application: NSRunningApplication
+        let window: AXUIElement?
+    }
+
     func activate(_ window: WarpWindow) {
         if window.isWindowlessApplication {
             window.application.unhide()
@@ -17,16 +22,64 @@ final class WindowActivator {
 
         let appElement = AXUIElementCreateApplication(window.application.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, 1.0)
-        window.application.unhide()
+        if window.application.isHidden {
+            window.application.unhide()
+        }
         AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-        performActivation(window: window, appElement: appElement, element: element)
+
+        // Make the exact target the application's main/key window before asking
+        // macOS to activate the application. Activating first can promote every
+        // window in that application above the app the user is leaving.
+        selectTabIfNeeded(window, fallback: element)
+        let activationElement = activationElement(for: window, fallback: element)
+        focus(activationElement, in: appElement)
+        window.application.activate(options: [.activateIgnoringOtherApps])
+        focus(activationElement, in: appElement)
+        // Focusing the shared AppKit window can restore its previously selected
+        // tab. Reassert the exact requested tab after the window is key.
+        selectTabIfNeeded(window, fallback: element)
 
         // Space transitions and deminiaturization complete asynchronously.
-        // Reassert the exact target after AppKit/WindowServer settle.
-        for delay in [0.06, 0.18, 0.40, 0.85] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.performActivation(window: window, appElement: appElement, element: element)
+        // Reassert only the selected window after WindowServer settles. Do not
+        // reactivate the whole app: that caused sibling windows to rise and the
+        // previously focused window to flash during quick switching.
+        for delay in [0.08, 0.22, 0.50] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak application = window.application] in
+                guard let self, let application, !application.isTerminated else { return }
+                AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+                self.selectTabIfNeeded(window, fallback: element)
+                let target = self.activationElement(for: window, fallback: element)
+                if delay < 0.1,
+                   NSWorkspace.shared.frontmostApplication?.processIdentifier != application.processIdentifier {
+                    self.focus(target, in: appElement)
+                    application.activate(options: [.activateIgnoringOtherApps])
+                }
+                self.focus(target, in: appElement)
+                self.selectTabIfNeeded(window, fallback: element)
             }
+        }
+    }
+
+    func captureFocus() -> FocusSnapshot? {
+        guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
+        let focusedWindow = attribute(appElement, kAXFocusedWindowAttribute).map { $0 as! AXUIElement }
+        return FocusSnapshot(application: application, window: focusedWindow)
+    }
+
+    func restoreFocus(_ snapshot: FocusSnapshot) {
+        guard !snapshot.application.isTerminated else { return }
+        let appElement = AXUIElementCreateApplication(snapshot.application.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.5)
+        if let window = snapshot.window {
+            focus(window, in: appElement)
+        }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != snapshot.application.processIdentifier {
+            snapshot.application.activate(options: [.activateIgnoringOtherApps])
+        }
+        if let window = snapshot.window {
+            focus(window, in: appElement)
         }
     }
 
@@ -50,22 +103,38 @@ final class WindowActivator {
         window.application.hide()
     }
 
-    private func performActivation(
-        window: WarpWindow,
-        appElement: AXUIElement,
-        element: AXUIElement
-    ) {
-        window.application.unhide()
-        window.application.activate(options: [.activateIgnoringOtherApps])
-        let activationElement = window.axTab
+    private func activationElement(for window: WarpWindow, fallback element: AXUIElement) -> AXUIElement {
+        currentTab(for: window, in: element)
             .flatMap { attribute($0, kAXWindowAttribute) }
             .map { $0 as! AXUIElement } ?? element
-        AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-        focus(activationElement, in: appElement)
-        if let tab = window.axTab {
+    }
+
+    private func selectTabIfNeeded(_ window: WarpWindow, fallback element: AXUIElement) {
+        if let tab = currentTab(for: window, in: element) {
             AXUIElementSetAttributeValue(tab, kAXValueAttribute as CFString, kCFBooleanTrue)
             AXUIElementPerformAction(tab, kAXPressAction as CFString)
         }
+    }
+
+    private func currentTab(for window: WarpWindow, in element: AXUIElement) -> AXUIElement? {
+        guard window.axTab != nil else { return nil }
+        let expectedTitle = window.rawTitle ?? window.title
+        let appElement = AXUIElementCreateApplication(window.application.processIdentifier)
+        let liveWindows = (attribute(appElement, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+        for candidateWindow in [element] + liveWindows {
+            if let children = attribute(candidateWindow, kAXChildrenAttribute) as? [AXUIElement],
+               let group = children.first(where: {
+                   attribute($0, kAXRoleAttribute) as? String == "AXTabGroup"
+               }),
+               let tabs = attribute(group, kAXTabsAttribute) as? [AXUIElement],
+               let current = tabs.first(where: {
+                   (attribute($0, kAXTitleAttribute) as? String)?
+                       .trimmingCharacters(in: .whitespacesAndNewlines) == expectedTitle
+               }) {
+                return current
+            }
+        }
+        return window.axTab
     }
 
     private func focus(_ element: AXUIElement, in appElement: AXUIElement) {

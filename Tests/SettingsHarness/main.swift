@@ -33,6 +33,12 @@ func waitUntil(_ timeout: TimeInterval, condition: () -> Bool) -> Bool {
     return condition()
 }
 
+func appPreferenceString(_ key: String) -> String? {
+    let appID = "com.warptab.app" as CFString
+    CFPreferencesAppSynchronize(appID)
+    return CFPreferencesCopyAppValue(key as CFString, appID) as? String
+}
+
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     guard condition() else {
         fputs("FAIL: \(message)\n", stderr)
@@ -86,6 +92,12 @@ func size(_ value: CFTypeRef?) -> CGSize? {
     return AXValueGetValue(value as! AXValue, .cgSize, &result) ? result : nil
 }
 
+func frame(_ element: AXUIElement) -> CGRect? {
+    guard let origin = point(value(element, kAXPositionAttribute)),
+          let dimensions = size(value(element, kAXSizeAttribute)) else { return nil }
+    return CGRect(origin: origin, size: dimensions)
+}
+
 func pressSidebar(_ title: String) {
     if let button = descendants(of: axApp).first(where: {
         role($0) == kAXButtonRole && (
@@ -99,8 +111,11 @@ func pressSidebar(_ title: String) {
         )
         return
     }
-    guard let label = descendants(of: axApp).first(where: {
+    guard let label = descendants(of: axApp).filter({
         role($0) == kAXStaticTextRole && string($0, kAXValueAttribute) == title
+    }).min(by: {
+        (point(value($0, kAXPositionAttribute))?.x ?? .greatestFiniteMagnitude) <
+            (point(value($1, kAXPositionAttribute))?.x ?? .greatestFiniteMagnitude)
     }) else {
         fputs("FAIL: missing sidebar item \(title)\n", stderr)
         exit(1)
@@ -144,10 +159,169 @@ func pressSidebar(_ title: String) {
     exit(1)
 }
 
+func verifyDockControlAlignment() {
+    guard let previewLabel = find("Preview size"),
+          let previewFrame = frame(previewLabel),
+          let defaultSegment = find("Default"),
+          let nearestToggle = descendants(of: axApp)
+            .filter({ role($0) == kAXCheckBoxRole && frame($0) != nil })
+            .min(by: {
+                abs(frame($0)!.midY - previewFrame.midY) < abs(frame($1)!.midY - previewFrame.midY)
+            }),
+          let toggleFrame = frame(nearestToggle) else {
+        fputs("FAIL: Dock control geometry is unavailable\n", stderr)
+        exit(1)
+    }
+    var selectorElement = defaultSegment
+    var current = defaultSegment
+    while let parent = value(current, kAXParentAttribute).map({ $0 as! AXUIElement }) {
+        guard let parentFrame = frame(parent),
+              parentFrame.width <= 260,
+              parentFrame.height <= 50 else { break }
+        selectorElement = parent
+        current = parent
+    }
+    guard let selectorFrame = frame(selectorElement) else {
+        fputs("FAIL: Dock selector frame is unavailable\n", stderr)
+        exit(1)
+    }
+    // SwiftUI's segmented picker exposes only its radio-group content to AX;
+    // account for the equal native inset inside the configured 170-point frame.
+    let selectorOuterMaxX = selectorFrame.maxX + max(0, 170 - selectorFrame.width) / 2
+    require(abs(selectorOuterMaxX - toggleFrame.maxX) <= 12,
+            "Dock preview size selector aligns with the trailing control column")
+}
+
 require(find("Window Switcher") != nil, "Window Switcher page is present")
 require(find("Dock") != nil, "Dock sidebar item is present")
 require(find("Window Snapping") != nil, "Window Snapping sidebar item is present")
-require(find("Appearance") != nil, "Appearance section is present")
+require(find("Quit WarpTab from settings") != nil, "settings sidebar quit button is present")
+
+if CommandLine.arguments.contains("--quit-confirmation-only") {
+    require(app.terminate(), "quit request is accepted")
+    require(waitUntil(2) { find("Quit WarpTab?") != nil }, "quit confirmation appears")
+    press("Cancel")
+    require(waitUntil(2) { !app.isTerminated }, "cancelling keeps WarpTab running")
+    require(app.terminate(), "second quit request is accepted")
+    require(waitUntil(2) { find("Quit WarpTab?") != nil }, "quit confirmation appears again")
+    guard let confirmButton = descendants(of: axApp).first(where: {
+        role($0) == kAXButtonRole && string($0, kAXTitleAttribute) == "Quit WarpTab"
+    }) else {
+        fputs("FAIL: missing Quit WarpTab confirmation button\n", stderr)
+        exit(1)
+    }
+    require(
+        AXUIElementPerformAction(confirmButton, kAXPressAction as CFString) == .success,
+        "Quit WarpTab confirmation is clickable"
+    )
+    require(waitUntil(3) { app.isTerminated }, "confirming quits WarpTab")
+    print("Quit confirmation checks completed.")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--dock-geometry-only") {
+    pressSidebar("Dock")
+    require(waitUntil(2) { find("Dock window previews") != nil }, "Dock page opens")
+    verifyDockControlAlignment()
+    print("Settings Dock geometry checks completed.")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--snap-assist-style-only") {
+    pressSidebar("Window Snapping")
+    require(waitUntil(2) { find("Snap Assist view") != nil }, "Window Snapping page opens")
+    press("List Snap Assist view")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "snapAssistLayout") == "list"
+    }, "List Snap Assist illustration updates the existing preference")
+    press("Thumbnails Snap Assist view")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "snapAssistLayout") == "thumbnails"
+    }, "Thumbnail Snap Assist illustration updates the existing preference")
+    print("Settings Snap Assist style checks completed.")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--snap-behavior-illustrations-only") {
+    pressSidebar("Window Snapping")
+    require(waitUntil(2) { find("After minimizing") != nil }, "Window Snapping behavior illustrations open")
+
+    press("Let macOS choose")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "snapMinimizeFocusBehavior") == "systemDefault"
+    }, "Let macOS choose illustration updates the existing preference")
+    press("Activate window behind")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "snapMinimizeFocusBehavior") == "activateWindowBehind"
+    }, "Activate window behind illustration updates the existing preference")
+
+    press("Control active window")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "snapUpAfterMinimizeBehavior") == "controlActiveWindow"
+    }, "Control active window illustration updates the existing preference")
+    press("Restore minimized window")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "snapUpAfterMinimizeBehavior") == "restoreMinimizedWindow"
+    }, "Restore minimized window illustration updates the existing preference")
+
+    print("Settings Snap behavior illustration checks completed.")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--speaker-volume-slider-only") {
+    pressSidebar("Sound Mixer")
+    require(waitUntil(2) { find("Speaker volume after disconnect") != nil }, "Speaker volume slider is present")
+    guard let slider = find("Speaker volume after disconnect") else { exit(1) }
+    require(
+        AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, NSNumber(value: 0.65)) == .success,
+        "Speaker volume slider accepts a value"
+    )
+    require(waitUntil(2) {
+        abs((UserDefaults(suiteName: "com.warptab.app")?.double(forKey: "soundDisconnectVolume") ?? 0) - 0.65) < 0.001
+    }, "Speaker volume slider updates the existing preference")
+    print("Settings speaker volume slider checks completed.")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--native-tabs-illustrations-only") {
+    pressSidebar("Window Switcher")
+    require(waitUntil(2) { find("Native window tabs") != nil }, "Native window tabs illustrations are present")
+    press("Show Native Tabs Individually")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "nativeTabBehavior") == "individual"
+    }, "Individual-tabs illustration updates the existing preference")
+    press("Treat Tab Group as One Window")
+    require(waitUntil(2) {
+        UserDefaults(suiteName: "com.warptab.app")?.string(forKey: "nativeTabBehavior") == "grouped"
+    }, "Grouped-tabs illustration updates the existing preference")
+    print("Settings native-tabs illustration checks completed.")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--dock-double-click-illustrations-only") {
+    pressSidebar("Dock")
+    require(waitUntil(2) { find("Double-click minimizes") != nil }, "Dock double-click illustrations are present")
+    press("Top Window double-click option")
+    require(waitUntil(2) {
+        find("Top Window double-click option").flatMap { string($0, kAXValueAttribute) } == "Selected"
+    }, "Top-window illustration finishes updating its selected state")
+    require(waitUntil(2) {
+        appPreferenceString("dockDoubleClickMinimizeScope") == "topWindow"
+    }, "Top-window illustration updates the existing preference")
+    press("All Windows double-click option")
+    require(waitUntil(2) {
+        find("All Windows double-click option").flatMap { string($0, kAXValueAttribute) } == "Selected"
+    }, "All-windows illustration finishes updating its selected state")
+    require(waitUntil(2) {
+        appPreferenceString("dockDoubleClickMinimizeScope") == "allWindows"
+    }, "All-windows illustration updates the existing preference")
+    print("Settings Dock double-click illustration checks completed.")
+    exit(0)
+}
+
+pressSidebar("Window Switcher")
+require(waitUntil(3) { find("Appearance") != nil }, "Appearance section is present")
+require(find("Show View Style in menu bar") != nil, "View Style menu visibility option is present")
 require(find("Enable Window Switcher") != nil, "enable control is accessible")
 require(find("Keyboard shortcut") != nil, "shortcut recorder is accessible")
 require(find("Same Application") != nil, "same-application shortcut row is present")
@@ -185,6 +359,18 @@ for expected in [
 }
 require(find("Window previews") == nil, "Window previews option is removed")
 
+guard let viewStyleMenuToggle = find("Show View Style menu item") else {
+    fputs("FAIL: missing View Style menu visibility toggle\n", stderr)
+    exit(1)
+}
+require(
+    AXUIElementPerformAction(viewStyleMenuToggle, kAXPressAction as CFString) == .success,
+    "View Style menu visibility toggle is clickable"
+)
+require(waitUntil(2) {
+    UserDefaults(suiteName: "com.warptab.app")?.bool(forKey: "showViewStyleInWarpTabMenu") == false
+}, "View Style menu visibility option persists")
+
 pressSidebar("Dock")
 require(waitUntil(2) { find("Dock window previews") != nil }, "Dock page opens")
 for expected in [
@@ -196,8 +382,23 @@ for expected in [
     require(find(expected) != nil, "\(expected) Dock option is present")
 }
 
+verifyDockControlAlignment()
+
 pressSidebar("Window Snapping")
-require(waitUntil(2) { find("Coming Soon") != nil }, "Window Snapping shows only its Coming Soon page")
+require(waitUntil(2) { find("Enable Windows-style snapping") != nil }, "Window Snapping settings page opens")
+require(find("After minimizing") != nil, "Minimize focus choice is present")
+require(find("Next Up command") != nil, "Up-after-minimize choice is present")
+require(find("Activate window behind") != nil, "Activate-behind choice is present")
+require(find("Restore minimized window") != nil, "Restore-minimized choice is present")
+require(find("Move snapping across displays") != nil, "Cross-display option is present")
+require(find("Show Snap Assist") != nil, "Snap Assist option is present")
+require(find("Snap Assist view") != nil, "Snap Assist view choice is present")
+require(find("Thumbnails Snap Assist view") != nil, "Thumbnail Snap Assist choice is present")
+for expected in [
+    "Move / Snap Left", "Move / Snap Right", "Move / Snap Up", "Move / Snap Down"
+] {
+    require(find(expected) != nil, "\(expected) shortcut is shown")
+}
 
 pressSidebar("Permissions")
 require(waitUntil(2) { find("Accessibility") != nil && find("Screen Recording") != nil },

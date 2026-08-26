@@ -2,12 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>WarpTab uses system audio access to adjust volume and output for individual applications.</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>WarpTab</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.warptab.app</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.warptab.app</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.warptab.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>warptab</string>
+			</array>
+		</dict>
+	</array>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

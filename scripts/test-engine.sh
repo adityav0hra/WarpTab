@@ -16,6 +16,7 @@ swiftc \
   "$PROJECT_DIR/Sources/WarpTab/WindowFilter.swift" \
   "$PROJECT_DIR/Sources/WarpTab/WindowSearch.swift" \
   "$PROJECT_DIR/Sources/WarpTab/WarpPreferences.swift" \
+  "$PROJECT_DIR/Sources/WarpTab/WindowSnapModel.swift" \
   "$PROJECT_DIR/Tests/EngineHarness/main.swift" \
   -o "$OUTPUT"
 

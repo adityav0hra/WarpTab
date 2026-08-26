@@ -22,7 +22,9 @@ private func wait(_ seconds: Double) {
 }
 
 private func waitForFixtureWindows(timeout: TimeInterval = 5) throws {
-    let required = Set(["WarpTab Test — Alpha", "WarpTab Test — Beta", "WarpTab Native Tab — One"])
+    let required = CommandLine.arguments.contains("--focus-stability-only")
+        ? Set(["WarpTab Small Window", "WarpTab Large Window"])
+        : Set(["WarpTab Test — Alpha", "WarpTab Test — Beta", "WarpTab Native Tab — One"])
     let deadline = Date().addingTimeInterval(timeout)
     repeat {
         if let titles = try? fixtureWindows().compactMap({ attribute($0, kAXTitleAttribute) as? String }),
@@ -148,6 +150,23 @@ private func releaseSwitcherModifiers(backwards: Bool = false) {
     wait(0.8)
 }
 
+private func releaseSwitcherModifiersAndObserve(
+    bundleIdentifier: String,
+    backwards: Bool = false
+) -> Bool {
+    if backwards { postKey(56, down: false, flags: [.maskAlternate]) }
+    postKey(58, down: false, flags: [])
+    let deadline = Date().addingTimeInterval(0.6)
+    var observed = false
+    repeat {
+        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleIdentifier {
+            observed = true
+        }
+        wait(0.02)
+    } while Date() < deadline
+    return observed
+}
+
 private func typeSearch(_ text: String) throws {
     let codes: [Character: CGKeyCode] = [
         "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5,
@@ -176,6 +195,36 @@ private func warpTabOverlayWindow() -> CGWindowID? {
               bounds.width > 200, bounds.height > 40 else { return nil }
         return (CGWindowID(number.uint32Value), bounds.width * bounds.height)
     }.max(by: { $0.1 < $1.1 })?.0
+}
+
+private func visibleWindowOrder() -> [(owner: String, title: String, bounds: CGRect)] {
+    let windows = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+    ) as? [[String: Any]] ?? []
+    return windows.compactMap { info in
+        guard let owner = info[kCGWindowOwnerName as String] as? String,
+              let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary) else { return nil }
+        return (owner, info[kCGWindowName as String] as? String ?? "", bounds)
+    }
+}
+
+private func showWarpTabSettings() throws {
+    guard let warpTab = NSRunningApplication.runningApplications(withBundleIdentifier: "com.warptab.app").first else {
+        throw IntegrationFailure.assertion("WarpTab is not running")
+    }
+    warpTab.activate(options: [.activateIgnoringOtherApps])
+    press(43, flags: [.maskCommand])
+    let deadline = Date().addingTimeInterval(3)
+    repeat {
+        let hasSettings = visibleWindowOrder().contains {
+            $0.owner == "WarpTab" && $0.bounds.width >= 700 && $0.bounds.height >= 500
+        }
+        if hasSettings,
+           NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.warptab.app" { return }
+        wait(0.1)
+    } while Date() < deadline
+    throw IntegrationFailure.assertion("WarpTab Settings did not become the frontmost reference window")
 }
 
 private func overlayText() throws -> String {
@@ -234,9 +283,106 @@ private func resetFocusHistory() throws {
 private func runTests() throws {
     try expect(AXIsProcessTrusted(), "Accessibility permission available to integration harness")
     try waitForFixtureWindows()
+
+    if CommandLine.arguments.contains("--focus-stability-only") {
+        let application = try fixtureApplication()
+        let largeElement = try fixtureWindow(titled: "WarpTab Large Window")
+        let candidate = WarpWindow(
+            identity: "focus-stability-large",
+            application: application,
+            axWindow: largeElement,
+            axTab: nil,
+            title: "WarpTab Large Window",
+            rawTitle: "WarpTab Large Window",
+            appName: "WarpTab Fixture",
+            bundleIdentifier: "com.warptab.fixture",
+            icon: application.icon ?? NSImage(),
+            windowID: nil,
+            bounds: .zero,
+            screenIdentifier: nil,
+            isFocused: false,
+            isMinimized: false,
+            isHidden: false,
+            isFullscreen: false,
+            isOnScreen: true,
+            isWindowlessApplication: false,
+            nativeTabCount: 1,
+            lastFocusedAt: nil
+        )
+        WindowActivator().activate(candidate)
+        let deadline = Date().addingTimeInterval(1.0)
+        var observedLarge = false
+        var originalReappeared = false
+        repeat {
+            let title = try focusedFixtureTitle()
+            if title == "WarpTab Large Window" { observedLarge = true }
+            if observedLarge, title == "WarpTab Small Window" { originalReappeared = true }
+            wait(0.01)
+        } while Date() < deadline
+        try expect(observedLarge, "The large destination window receives focus")
+        try expect(!originalReappeared, "The original small window never flashes back after switching")
+        print("WarpTab focus-stability test passed: \(assertions) assertions")
+        return
+    }
+
     try resetFocusHistory()
     let initialFocusedTitle = try focusedFixtureTitle()
     try expect(initialFocusedTitle == "WarpTab Native Tab — One", "Fixture focus setup")
+
+    if CommandLine.arguments.contains("--navigation-only") {
+        openSwitcher()
+        try expect(warpTabOverlayWindow() != nil, "First Option-Tab press opens the overlay")
+        press(125)
+        press(36)
+        wait(0.5)
+        try expect(warpTabOverlayWindow() == nil, "Arrow plus Enter commits and closes")
+        postKey(58, down: false, flags: [])
+        print("WarpTab switcher navigation test passed: \(assertions) assertions")
+        return
+    }
+
+    if CommandLine.arguments.contains("--single-window-promotion-only") {
+        try showWarpTabSettings()
+        let application = try fixtureApplication()
+        let element = try fixtureWindow(titled: "WarpTab Test — Beta")
+        let candidate = WarpWindow(
+            identity: "promotion-test-beta",
+            application: application,
+            axWindow: element,
+            axTab: nil,
+            title: "WarpTab Test — Beta",
+            rawTitle: "WarpTab Test — Beta",
+            appName: "WarpTab Fixture",
+            bundleIdentifier: "com.warptab.fixture",
+            icon: application.icon ?? NSImage(),
+            windowID: nil,
+            bounds: .zero,
+            screenIdentifier: nil,
+            isFocused: false,
+            isMinimized: false,
+            isHidden: false,
+            isFullscreen: false,
+            isOnScreen: true,
+            isWindowlessApplication: false,
+            nativeTabCount: 1,
+            lastFocusedAt: nil
+        )
+        WindowActivator().activate(candidate)
+        wait(0.8)
+        let ordered = visibleWindowOrder()
+        guard let settingsIndex = ordered.firstIndex(where: {
+            $0.owner == "WarpTab" && $0.bounds.width >= 700 && $0.bounds.height >= 500
+        }) else {
+            throw IntegrationFailure.assertion("WarpTab Settings reference window disappeared")
+        }
+        let promotedFixtureWindows = ordered[..<settingsIndex].filter { $0.owner == "WarpTab Fixture" }
+        print("Frontmost after switch: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil")")
+        print("Window order through Settings: \(ordered[...settingsIndex].map { "\($0.owner):\($0.title)" })")
+        print("Fixture windows promoted above Settings: \(promotedFixtureWindows.map(\.title))")
+        try expect(promotedFixtureWindows.count == 1, "Switching promotes only the selected window, not every sibling window")
+        print("WarpTab single-window promotion test passed: \(assertions) assertions")
+        return
+    }
 
     openSwitcher()
     try expect(warpTabOverlayWindow() != nil, "First Option-Tab press opens the overlay")
@@ -467,9 +613,8 @@ private func runSameApplicationShortcutTests() throws {
     print("Same-application shortcut OCR:\n\(text)")
     try expect(text.contains("Beta"), "Another current-app window is present")
     try expect(!text.contains("Safari") && !text.contains("Finder"), "Other applications are excluded")
-    releaseSwitcherModifiers()
     try expect(
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.warptab.fixture",
+        releaseSwitcherModifiersAndObserve(bundleIdentifier: "com.warptab.fixture"),
         "Quick release stays in the current application"
     )
     let quickDestination = try focusedFixtureTitle()
@@ -479,20 +624,16 @@ private func runSameApplicationShortcutTests() throws {
     openSameApplicationSwitcher()
     press(50, flags: [.maskAlternate], repeatValue: 1)
     try expect(warpTabOverlayWindow() != nil, "Repeated Grave keeps the same-app switcher open")
-    releaseSwitcherModifiers()
-    wait(0.5)
     try expect(
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.warptab.fixture",
+        releaseSwitcherModifiersAndObserve(bundleIdentifier: "com.warptab.fixture"),
         "Repeated cycling cannot leave the current application"
     )
 
     try activateFixtureAsFrontmost()
     openSameApplicationSwitcher(backwards: true)
     try expect(warpTabOverlayWindow() != nil, "Option-Shift-Grave opens reverse same-app cycling")
-    releaseSwitcherModifiers(backwards: true)
-    wait(0.5)
     try expect(
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.warptab.fixture",
+        releaseSwitcherModifiersAndObserve(bundleIdentifier: "com.warptab.fixture", backwards: true),
         "Reverse cycling cannot leave the current application"
     )
 }

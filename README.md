@@ -18,7 +18,12 @@ WarpTab gives every window its own entry in a compact, native macOS switcher. Th
 - **Minimized windows included** — select one to restore and focus it.
 - **Window history that feels natural** — individual windows are ordered by most-recent use, including windows from the same app.
 - **Same-app switching** — press <kbd>⌥</kbd> <kbd>`</kbd> to cycle only through windows of the current application.
+- **Dock app shortcuts** — press <kbd>⌘</kbd> <kbd>1</kbd> through <kbd>⌘</kbd> <kbd>0</kbd> to launch or reveal every window of that Dock app; use <kbd>⌘</kbd> <kbd>⌥</kbd> with the number for its special character.
 - **Dock window previews** — hover over a running app in the Dock to see continuously refreshed previews, including optional minimized, hidden-app, and full-screen windows. Choose Default or Small sizing, focus a window, or close it directly.
+- **Windows-style snapping** — move, resize, maximize, restore, and minimize windows with directional shortcuts, optional cross-display movement, and Snap Assist.
+- **Per-app Sound Mixer** — control application volumes, output devices, microphone state, and protective speaker volume after headphones disconnect.
+- **Windows Extras** — optional Finder shortcuts, clipboard history, familiar key-repeat behavior, and Windows-style window controls.
+- **Stay Awake** — prevent display or system sleep from WarpTab or its optional menu-bar control.
 - **Hidden, full-screen, and cross-Space windows** — WarpTab keeps discovered windows available and focuses the exact target.
 - **Search and navigation** — type an app or window name, use arrows, reverse with <kbd>⇧</kbd> <kbd>Tab</kbd>, press <kbd>Return</kbd> to switch, or <kbd>Esc</kbd> to cancel.
 - **Window controls** — while the switcher is open, use <kbd>⌘</kbd> <kbd>W</kbd>, <kbd>⌘</kbd> <kbd>M</kbd>, or <kbd>⌘</kbd> <kbd>H</kbd> on the selected window.
@@ -47,6 +52,7 @@ Press <kbd>⌥ Option</kbd> <kbd>`</kbd> for the same interaction limited to the
 - macOS 13 Ventura or later
 - Accessibility permission for discovering and focusing windows
 - Screen Recording permission only when using Thumbnail view
+- Audio capture access when using per-application Sound Mixer controls
 - Swift 6 / Xcode Command Line Tools when building from source
 
 ## Install with Homebrew
@@ -104,6 +110,10 @@ The WarpTab app lets you:
 - Switch between List and Thumbnail layouts
 - Control search and native macOS tab handling
 - Use the redesigned System Settings-style interface with dedicated Window Switcher, Dock, Permissions, and About pages
+- Configure Windows-style snapping and Snap Assist behavior
+- Configure the Sound Mixer, outputs, microphones, and global audio shortcuts
+- Enable Stay Awake and choose where its controls appear
+- Configure Finder, clipboard, keyboard, and window-management extras
 - Enable or disable window previews when hovering over Dock apps
 - Include or hide minimized, hidden, full-screen, other-Space, and windowless items
 - Choose the switcher display and whether to show windows from every display

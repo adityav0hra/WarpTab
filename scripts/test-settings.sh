@@ -26,6 +26,9 @@ trap cleanup EXIT
 pkill -x WarpTab 2>/dev/null || true
 wait_for_exit
 defaults write com.warptab.app customShortcut '48,2048,Tab'
+defaults write com.warptab.app showViewStyleInWarpTabMenu -bool true
+defaults write com.warptab.app dockPreviewsEnabled -bool true
+defaults write com.warptab.app minimizeAllWindowsOnDockDoubleClick -bool true
 open -n /Applications/WarpTab.app
 sleep 1
 
@@ -34,4 +37,4 @@ swiftc \
   -framework ApplicationServices \
   "$PROJECT_DIR/Tests/SettingsHarness/main.swift" \
   -o "$BACKUP_DIR/settings-harness"
-"$BACKUP_DIR/settings-harness"
+"$BACKUP_DIR/settings-harness" "$@"

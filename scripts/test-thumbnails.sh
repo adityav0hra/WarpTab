@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
-PREFERENCES_BACKUP=$(mktemp /tmp/warptab-thumbnail-preferences.XXXXXX.plist)
+PREFERENCES_BACKUP=$(mktemp /tmp/warptab-thumbnail-preferences.XXXXXX)
 HARNESS="$PROJECT_DIR/.build/warptab-thumbnail-tests"
 OUTPUT="/tmp/warptab-thumbnail-modern.png"
 
@@ -11,7 +11,7 @@ defaults export com.warptab.app "$PREFERENCES_BACKUP" >/dev/null
 
 cleanup() {
   pkill -x WarpTabFixture 2>/dev/null || true
-  osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+  pkill -x WarpTab 2>/dev/null || true
   defaults import com.warptab.app "$PREFERENCES_BACKUP" >/dev/null
   rm -f "$PREFERENCES_BACKUP"
   open -n /Applications/WarpTab.app --args --background
@@ -26,7 +26,7 @@ defaults write com.warptab.app nativeTabBehavior individual
 
 fixture_app=$($PROJECT_DIR/scripts/build-window-fixture.sh)
 pkill -x WarpTabFixture 2>/dev/null || true
-osascript -e 'tell application id "com.warptab.app" to quit' >/dev/null 2>&1 || true
+pkill -x WarpTab 2>/dev/null || true
 open -n "$fixture_app"
 sleep 1
 open -n /Applications/WarpTab.app --args --background

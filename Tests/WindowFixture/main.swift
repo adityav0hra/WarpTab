@@ -6,6 +6,19 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
+        if CommandLine.arguments.contains("--size-transition") {
+            let small = makeWindow(title: "WarpTab Small Window", origin: NSPoint(x: 120, y: 560))
+            small.setContentSize(NSSize(width: 300, height: 220))
+            small.tabbingMode = .disallowed
+            let large = makeWindow(title: "WarpTab Large Window", origin: NSPoint(x: 260, y: 120))
+            large.setContentSize(NSSize(width: 900, height: 650))
+            large.tabbingMode = .disallowed
+            windows = [small, large]
+            large.orderFront(nil)
+            small.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
         if CommandLine.arguments.contains("--aspect-previews") {
             let portrait = makeWindow(title: "WarpTab Portrait Preview", origin: NSPoint(x: 120, y: 180))
             portrait.setContentSize(NSSize(width: 260, height: 620))

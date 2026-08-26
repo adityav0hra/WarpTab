@@ -62,8 +62,45 @@ enum DockDoubleClickMinimizeScope: String, CaseIterable {
     }
 }
 
+enum SnapMinimizeFocusBehavior: String, CaseIterable {
+    case activateWindowBehind
+    case systemDefault
+
+    var displayName: String {
+        switch self {
+        case .activateWindowBehind: return "Activate window behind"
+        case .systemDefault: return "Let macOS choose"
+        }
+    }
+}
+
+enum SnapUpAfterMinimizeBehavior: String, CaseIterable {
+    case restoreMinimizedWindow
+    case controlActiveWindow
+
+    var displayName: String {
+        switch self {
+        case .restoreMinimizedWindow: return "Restore minimized window"
+        case .controlActiveWindow: return "Control active window"
+        }
+    }
+}
+
+enum SnapAssistLayout: String, CaseIterable {
+    case thumbnails
+    case list
+
+    var displayName: String {
+        switch self {
+        case .thumbnails: return "Thumbnails"
+        case .list: return "List"
+        }
+    }
+}
+
 final class WarpPreferences {
     var onChange: (() -> Void)?
+    var onWindowsBehaviorChange: (() -> Void)?
 
     private let defaults: UserDefaults
 
@@ -181,6 +218,127 @@ final class WarpPreferences {
         set { set(newValue.rawValue, forKey: "nativeTabBehavior") }
     }
 
+    var dockAppShortcutsEnabled: Bool {
+        get { defaults.bool(forKey: "dockAppShortcutsEnabled") }
+        set { setWindowsBehavior(newValue, forKey: "dockAppShortcutsEnabled") }
+    }
+
+    var finderCutPasteEnabled: Bool {
+        get { defaults.bool(forKey: "finderCutPasteEnabled") }
+        set { setWindowsBehavior(newValue, forKey: "finderCutPasteEnabled") }
+    }
+
+    var finderF2RenameEnabled: Bool {
+        get { defaults.bool(forKey: "finderF2RenameEnabled") }
+        set { setWindowsBehavior(newValue, forKey: "finderF2RenameEnabled") }
+    }
+
+    var clipboardHistoryEnabled: Bool {
+        get { defaults.bool(forKey: "clipboardHistoryEnabled") }
+        set { setWindowsBehavior(newValue, forKey: "clipboardHistoryEnabled") }
+    }
+
+    var clipboardPlainTextOnClick: Bool {
+        get { defaults.bool(forKey: "clipboardPlainTextOnClick") }
+        set { setWindowsBehavior(newValue, forKey: "clipboardPlainTextOnClick") }
+    }
+
+    var clearClipboardOnSleep: Bool {
+        get { defaults.bool(forKey: "clearClipboardOnSleep") }
+        set { setWindowsBehavior(newValue, forKey: "clearClipboardOnSleep") }
+    }
+
+    var repeatKeysOnHold: Bool {
+        get { defaults.bool(forKey: "repeatKeysOnHold") }
+        set { setWindowsBehavior(newValue, forKey: "repeatKeysOnHold") }
+    }
+
+    var controlAccentChooserEnabled: Bool {
+        get { defaults.bool(forKey: "controlAccentChooserEnabled") }
+        set { setWindowsBehavior(newValue, forKey: "controlAccentChooserEnabled") }
+    }
+
+    var greenButtonMaximizes: Bool {
+        get { defaults.bool(forKey: "greenButtonMaximizes") }
+        set { setWindowsBehavior(newValue, forKey: "greenButtonMaximizes") }
+    }
+
+    var shiftGreenUsesFullScreen: Bool {
+        get { defaults.bool(forKey: "shiftGreenUsesFullScreen") }
+        set { setWindowsBehavior(newValue, forKey: "shiftGreenUsesFullScreen") }
+    }
+
+    var quitOnLastWindowClose: Bool {
+        get { defaults.bool(forKey: "quitOnLastWindowClose") }
+        set { setWindowsBehavior(newValue, forKey: "quitOnLastWindowClose") }
+    }
+
+    var shiftCloseKeepsAppRunning: Bool {
+        get { defaults.bool(forKey: "shiftCloseKeepsAppRunning") }
+        set { setWindowsBehavior(newValue, forKey: "shiftCloseKeepsAppRunning") }
+    }
+
+    var commandMMinimizesAllWindows: Bool {
+        get { defaults.bool(forKey: "commandMMinimizesAllWindows") }
+        set { setWindowsBehavior(newValue, forKey: "commandMMinimizesAllWindows") }
+    }
+
+    var windowSnappingEnabled: Bool {
+        get { defaults.bool(forKey: "windowSnappingEnabled") }
+        set { setWindowsBehavior(newValue, forKey: "windowSnappingEnabled") }
+    }
+
+    var activateWindowBehindAfterSnapMinimize: Bool {
+        get { snapMinimizeFocusBehavior == .activateWindowBehind }
+        set { snapMinimizeFocusBehavior = newValue ? .activateWindowBehind : .systemDefault }
+    }
+
+    var snapUpRestoresLastMinimizedWindow: Bool {
+        get { snapUpAfterMinimizeBehavior == .restoreMinimizedWindow }
+        set { snapUpAfterMinimizeBehavior = newValue ? .restoreMinimizedWindow : .controlActiveWindow }
+    }
+
+    var snapMinimizeFocusBehavior: SnapMinimizeFocusBehavior {
+        get {
+            SnapMinimizeFocusBehavior(
+                rawValue: defaults.string(forKey: "snapMinimizeFocusBehavior") ?? ""
+            ) ?? .activateWindowBehind
+        }
+        set {
+            defaults.set(newValue == .activateWindowBehind, forKey: "activateWindowBehindAfterSnapMinimize")
+            setWindowsBehavior(newValue.rawValue, forKey: "snapMinimizeFocusBehavior")
+        }
+    }
+
+    var snapUpAfterMinimizeBehavior: SnapUpAfterMinimizeBehavior {
+        get {
+            SnapUpAfterMinimizeBehavior(
+                rawValue: defaults.string(forKey: "snapUpAfterMinimizeBehavior") ?? ""
+            ) ?? .restoreMinimizedWindow
+        }
+        set {
+            defaults.set(newValue == .restoreMinimizedWindow, forKey: "snapUpRestoresLastMinimizedWindow")
+            setWindowsBehavior(newValue.rawValue, forKey: "snapUpAfterMinimizeBehavior")
+        }
+    }
+
+    var windowSnapMoveAcrossDisplays: Bool {
+        get { defaults.bool(forKey: "windowSnapMoveAcrossDisplays") }
+        set { setWindowsBehavior(newValue, forKey: "windowSnapMoveAcrossDisplays") }
+    }
+
+    var windowSnapAssistEnabled: Bool {
+        get { defaults.bool(forKey: "windowSnapAssistEnabled") }
+        set { setWindowsBehavior(newValue, forKey: "windowSnapAssistEnabled") }
+    }
+
+    var snapAssistLayout: SnapAssistLayout {
+        get {
+            SnapAssistLayout(rawValue: defaults.string(forKey: "snapAssistLayout") ?? "") ?? .thumbnails
+        }
+        set { setWindowsBehavior(newValue.rawValue, forKey: "snapAssistLayout") }
+    }
+
     var excludedBundleIdentifiers: Set<String> {
         get { Set(defaults.stringArray(forKey: "excludedBundleIdentifiers") ?? []) }
         set {
@@ -244,6 +402,28 @@ final class WarpPreferences {
             "screenPlacement": SwitcherScreenPlacement.activeWindow.rawValue,
             "displayScope": WindowDisplayScope.allDisplays.rawValue,
             "nativeTabBehavior": NativeTabBehavior.grouped.rawValue,
+            "dockAppShortcutsEnabled": true,
+            "finderCutPasteEnabled": true,
+            "finderF2RenameEnabled": true,
+            "clipboardHistoryEnabled": true,
+            "clipboardPlainTextOnClick": true,
+            "clearClipboardOnSleep": false,
+            "repeatKeysOnHold": true,
+            "controlAccentChooserEnabled": true,
+            "greenButtonMaximizes": false,
+            "shiftGreenUsesFullScreen": true,
+            "quitOnLastWindowClose": false,
+            "shiftCloseKeepsAppRunning": true,
+            "commandMMinimizesAllWindows": true,
+            "windowSnappingEnabled": true,
+            "activateWindowBehindAfterSnapMinimize": true,
+            "snapUpRestoresLastMinimizedWindow": true,
+            "snapMinimizeFocusBehavior": SnapMinimizeFocusBehavior.activateWindowBehind.rawValue,
+            "snapUpAfterMinimizeBehavior": SnapUpAfterMinimizeBehavior.restoreMinimizedWindow.rawValue,
+            "windowSnapMoveAcrossDisplays": true,
+            "windowSnapAssistEnabled": true,
+            "snapAssistLayout": SnapAssistLayout.thumbnails.rawValue,
+            "showViewStyleInWarpTabMenu": true,
             "excludedBundleIdentifiers": []
         ])
     }
@@ -251,5 +431,10 @@ final class WarpPreferences {
     private func set(_ value: Any, forKey key: String) {
         defaults.set(value, forKey: key)
         onChange?()
+    }
+
+    private func setWindowsBehavior(_ value: Any, forKey key: String) {
+        set(value, forKey: key)
+        onWindowsBehaviorChange?()
     }
 }

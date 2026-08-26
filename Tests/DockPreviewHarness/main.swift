@@ -471,6 +471,12 @@ do {
     guard let alphaClose = closeButtons.first(where: { label($0).contains("WarpTab Test — Alpha") }) else {
         throw Failure.assertion("Alpha close button is unavailable")
     }
+    let frontmostBeforeClose = NSWorkspace.shared.frontmostApplication
+    let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
+    finder?.activate(options: [.activateIgnoringOtherApps])
+    try expect(waitUntil(2) {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder"
+    }, "A different application is frontmost before closing a background preview")
     try expect(click(alphaClose), "A window can be clicked closed from its preview")
     let fixture = NSRunningApplication.runningApplications(withBundleIdentifier: "com.warptab.fixture").first!
     let fixtureRoot = AXUIElementCreateApplication(fixture.processIdentifier)
@@ -479,6 +485,18 @@ do {
         return !windows.contains { label($0).contains("WarpTab Test — Alpha") }
     }, "Closing a preview closes the exact window")
     try expect(!fixture.isTerminated, "Closing a non-final window does not quit the app")
+    try expect(waitUntil(1) {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder"
+    }, "Closing a background preview does not raise the app's remaining windows")
+
+    if CommandLine.arguments.contains("--close-background-only") {
+        print("WarpTab background Dock-preview close test passed: \(assertions) assertions")
+        exit(0)
+    }
+
+    if let frontmostBeforeClose, !frontmostBeforeClose.isTerminated {
+        frontmostBeforeClose.activate(options: [.activateIgnoringOtherApps])
+    }
 
     guard movePointerToFixtureDockItem(dockRoot) != nil else {
         throw Failure.assertion("Fixture Dock item cannot be hovered after closing")

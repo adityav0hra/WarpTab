@@ -73,6 +73,13 @@ final class WindowStore {
         return storedWindows
     }
 
+    func focusedWindow() -> WarpWindow? {
+        let windows = allWindows()
+        if let focused = windows.first(where: \.isFocused) { return focused }
+        guard let identity = currentFocusedIdentity() else { return nil }
+        return windows.first { $0.identity == identity }
+    }
+
     func switchableWindows(on targetScreenIdentifier: String?) -> [WarpWindow] {
         let filtered = WindowFilter.apply(
             to: allWindows(),
