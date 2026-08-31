@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 5.10
 import PackageDescription
 
 let package = Package(
@@ -10,8 +10,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "WarpTab",
-            path: "Sources/WarpTab",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            path: "Sources/WarpTab"
         )
-    ]
+    ],
+    swiftLanguageVersions: [.v5]
 )
