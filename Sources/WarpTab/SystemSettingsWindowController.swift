@@ -7,11 +7,15 @@ import SwiftUI
 
 final class SystemSettingsWindowController: NSWindowController, NSWindowDelegate {
     private let model: WarpTabSettingsModel
+    private let mousePageModel: MouseSettingsPageModel
     private let onClose: () -> Void
 
     init(
         preferences: WarpPreferences,
         store: WindowStore,
+        screenTools: ScreenToolsController,
+        mouseSettings: MouseSettings,
+        mouseEventManager: MouseEventManager,
         initiallyEnabled: Bool,
         initiallySelectedShortcut: SwitcherShortcut,
         initiallySelectedLayout: SwitcherLayout,
@@ -19,6 +23,9 @@ final class SystemSettingsWindowController: NSWindowController, NSWindowDelegate
         initiallyShowsAwakeInWarpTabMenu: Bool,
         initiallyShowsViewStyleInWarpTabMenu: Bool,
         initiallyShowsClipboardInWarpTabMenu: Bool,
+        initiallyShowsScreenTextInWarpTabMenu: Bool,
+        initiallyShowsColorPickerInWarpTabMenu: Bool,
+        initiallyShowsWarpTabStatusItem: Bool,
         initiallyShowsClipboardStatusItem: Bool,
         initiallyShowsAwakeStatusItem: Bool,
         initiallyShowsSoundStatusItem: Bool,
@@ -29,6 +36,9 @@ final class SystemSettingsWindowController: NSWindowController, NSWindowDelegate
         onShowAwakeInWarpTabMenuChange: @escaping (Bool) -> Void,
         onShowViewStyleInWarpTabMenuChange: @escaping (Bool) -> Void,
         onShowClipboardInWarpTabMenuChange: @escaping (Bool) -> Void,
+        onShowScreenTextInWarpTabMenuChange: @escaping (Bool) -> Void,
+        onShowColorPickerInWarpTabMenuChange: @escaping (Bool) -> Void,
+        onShowWarpTabStatusItemChange: @escaping (Bool) -> Void,
         onShowClipboardStatusItemChange: @escaping (Bool) -> Void,
         onShowAwakeStatusItemChange: @escaping (Bool) -> Void,
         onShowSoundStatusItemChange: @escaping (Bool) -> Void,
@@ -46,6 +56,9 @@ final class SystemSettingsWindowController: NSWindowController, NSWindowDelegate
             showsAwakeInWarpTabMenu: initiallyShowsAwakeInWarpTabMenu,
             showsViewStyleInWarpTabMenu: initiallyShowsViewStyleInWarpTabMenu,
             showsClipboardInWarpTabMenu: initiallyShowsClipboardInWarpTabMenu,
+            showsScreenTextInWarpTabMenu: initiallyShowsScreenTextInWarpTabMenu,
+            showsColorPickerInWarpTabMenu: initiallyShowsColorPickerInWarpTabMenu,
+            showsWarpTabStatusItem: initiallyShowsWarpTabStatusItem,
             showsClipboardStatusItem: initiallyShowsClipboardStatusItem,
             showsAwakeStatusItem: initiallyShowsAwakeStatusItem,
             showsSoundStatusItem: initiallyShowsSoundStatusItem,
@@ -56,11 +69,18 @@ final class SystemSettingsWindowController: NSWindowController, NSWindowDelegate
             onShowAwakeInWarpTabMenuChange: onShowAwakeInWarpTabMenuChange,
             onShowViewStyleInWarpTabMenuChange: onShowViewStyleInWarpTabMenuChange,
             onShowClipboardInWarpTabMenuChange: onShowClipboardInWarpTabMenuChange,
+            onShowScreenTextInWarpTabMenuChange: onShowScreenTextInWarpTabMenuChange,
+            onShowColorPickerInWarpTabMenuChange: onShowColorPickerInWarpTabMenuChange,
+            onShowWarpTabStatusItemChange: onShowWarpTabStatusItemChange,
             onShowClipboardStatusItemChange: onShowClipboardStatusItemChange,
             onShowAwakeStatusItemChange: onShowAwakeStatusItemChange,
             onShowSoundStatusItemChange: onShowSoundStatusItemChange,
             onClearClipboard: onClearClipboard,
             onOpenAccessibility: onOpenAccessibility
+        )
+        mousePageModel = MouseSettingsPageModel(
+            settings: mouseSettings,
+            eventManager: mouseEventManager
         )
         self.onClose = onClose
 
@@ -79,7 +99,11 @@ final class SystemSettingsWindowController: NSWindowController, NSWindowDelegate
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 760, height: 560)
         window.setFrameAutosaveName("WarpTabSettingsWindow")
-        window.contentView = NSHostingView(rootView: WarpTabSettingsRootView(model: model))
+        window.contentView = NSHostingView(rootView: WarpTabSettingsRootView(
+            model: model,
+            screenTools: screenTools,
+            mousePageModel: mousePageModel
+        ))
         window.center()
     }
 
@@ -123,6 +147,9 @@ private final class WarpTabSettingsModel: ObservableObject {
     private let onShowAwakeInWarpTabMenuChange: (Bool) -> Void
     private let onShowViewStyleInWarpTabMenuChange: (Bool) -> Void
     private let onShowClipboardInWarpTabMenuChange: (Bool) -> Void
+    private let onShowScreenTextInWarpTabMenuChange: (Bool) -> Void
+    private let onShowColorPickerInWarpTabMenuChange: (Bool) -> Void
+    private let onShowWarpTabStatusItemChange: (Bool) -> Void
     private let onShowClipboardStatusItemChange: (Bool) -> Void
     private let onShowAwakeStatusItemChange: (Bool) -> Void
     private let onShowSoundStatusItemChange: (Bool) -> Void
@@ -136,6 +163,9 @@ private final class WarpTabSettingsModel: ObservableObject {
     @Published var showsAwakeInWarpTabMenu: Bool
     @Published var showsViewStyleInWarpTabMenu: Bool
     @Published var showsClipboardInWarpTabMenu: Bool
+    @Published var showsScreenTextInWarpTabMenu: Bool
+    @Published var showsColorPickerInWarpTabMenu: Bool
+    @Published var showsWarpTabStatusItem: Bool
     @Published var showsClipboardStatusItem: Bool
     @Published var showsAwakeStatusItem: Bool
     @Published var showsSoundStatusItem: Bool
@@ -157,6 +187,9 @@ private final class WarpTabSettingsModel: ObservableObject {
         showsAwakeInWarpTabMenu: Bool,
         showsViewStyleInWarpTabMenu: Bool,
         showsClipboardInWarpTabMenu: Bool,
+        showsScreenTextInWarpTabMenu: Bool,
+        showsColorPickerInWarpTabMenu: Bool,
+        showsWarpTabStatusItem: Bool,
         showsClipboardStatusItem: Bool,
         showsAwakeStatusItem: Bool,
         showsSoundStatusItem: Bool,
@@ -167,6 +200,9 @@ private final class WarpTabSettingsModel: ObservableObject {
         onShowAwakeInWarpTabMenuChange: @escaping (Bool) -> Void,
         onShowViewStyleInWarpTabMenuChange: @escaping (Bool) -> Void,
         onShowClipboardInWarpTabMenuChange: @escaping (Bool) -> Void,
+        onShowScreenTextInWarpTabMenuChange: @escaping (Bool) -> Void,
+        onShowColorPickerInWarpTabMenuChange: @escaping (Bool) -> Void,
+        onShowWarpTabStatusItemChange: @escaping (Bool) -> Void,
         onShowClipboardStatusItemChange: @escaping (Bool) -> Void,
         onShowAwakeStatusItemChange: @escaping (Bool) -> Void,
         onShowSoundStatusItemChange: @escaping (Bool) -> Void,
@@ -182,6 +218,9 @@ private final class WarpTabSettingsModel: ObservableObject {
         self.showsAwakeInWarpTabMenu = showsAwakeInWarpTabMenu
         self.showsViewStyleInWarpTabMenu = showsViewStyleInWarpTabMenu
         self.showsClipboardInWarpTabMenu = showsClipboardInWarpTabMenu
+        self.showsScreenTextInWarpTabMenu = showsScreenTextInWarpTabMenu
+        self.showsColorPickerInWarpTabMenu = showsColorPickerInWarpTabMenu
+        self.showsWarpTabStatusItem = showsWarpTabStatusItem
         self.showsClipboardStatusItem = showsClipboardStatusItem
         self.showsAwakeStatusItem = showsAwakeStatusItem
         self.showsSoundStatusItem = showsSoundStatusItem
@@ -192,6 +231,9 @@ private final class WarpTabSettingsModel: ObservableObject {
         self.onShowAwakeInWarpTabMenuChange = onShowAwakeInWarpTabMenuChange
         self.onShowViewStyleInWarpTabMenuChange = onShowViewStyleInWarpTabMenuChange
         self.onShowClipboardInWarpTabMenuChange = onShowClipboardInWarpTabMenuChange
+        self.onShowScreenTextInWarpTabMenuChange = onShowScreenTextInWarpTabMenuChange
+        self.onShowColorPickerInWarpTabMenuChange = onShowColorPickerInWarpTabMenuChange
+        self.onShowWarpTabStatusItemChange = onShowWarpTabStatusItemChange
         self.onShowClipboardStatusItemChange = onShowClipboardStatusItemChange
         self.onShowAwakeStatusItemChange = onShowAwakeStatusItemChange
         self.onShowSoundStatusItemChange = onShowSoundStatusItemChange
@@ -203,20 +245,23 @@ private final class WarpTabSettingsModel: ObservableObject {
     var active: Bool { enabled && accessibilityGranted && listenerRunning }
 
     func refresh() {
-        enabled = UserDefaults.standard.object(forKey: "switcherEnabled") as? Bool ?? true
+        enabled = UserDefaults.standard.object(forKey: "switcherEnabled") as? Bool ?? false
         shortcut = SwitcherShortcut(
             storageValue: UserDefaults.standard.string(forKey: "customShortcut") ?? ""
         ).map { $0.isReserved ? .defaultShortcut : $0 } ?? .defaultShortcut
         layout = SwitcherLayout(
             rawValue: UserDefaults.standard.string(forKey: "switcherLayout") ?? ""
         ) ?? .list
-        stayAwakeEnabled = UserDefaults.standard.object(forKey: "stayAwakeFeatureEnabled") as? Bool ?? true
-        showsAwakeInWarpTabMenu = UserDefaults.standard.object(forKey: "showAwakeInWarpTabMenu") as? Bool ?? true
-        showsViewStyleInWarpTabMenu = UserDefaults.standard.object(forKey: "showViewStyleInWarpTabMenu") as? Bool ?? true
-        showsClipboardInWarpTabMenu = UserDefaults.standard.object(forKey: "showClipboardInWarpTabMenu") as? Bool ?? true
+        stayAwakeEnabled = UserDefaults.standard.object(forKey: "stayAwakeFeatureEnabled") as? Bool ?? false
+        showsAwakeInWarpTabMenu = UserDefaults.standard.object(forKey: "showAwakeInWarpTabMenu") as? Bool ?? false
+        showsViewStyleInWarpTabMenu = UserDefaults.standard.object(forKey: "showViewStyleInWarpTabMenu") as? Bool ?? false
+        showsClipboardInWarpTabMenu = UserDefaults.standard.object(forKey: "showClipboardInWarpTabMenu") as? Bool ?? false
+        showsScreenTextInWarpTabMenu = UserDefaults.standard.object(forKey: "showScreenTextInWarpTabMenu") as? Bool ?? false
+        showsColorPickerInWarpTabMenu = UserDefaults.standard.object(forKey: "showColorPickerInWarpTabMenu") as? Bool ?? false
+        showsWarpTabStatusItem = UserDefaults.standard.object(forKey: "showWarpTabStatusItem") as? Bool ?? true
         showsClipboardStatusItem = UserDefaults.standard.bool(forKey: "showClipboardStatusItem")
         showsAwakeStatusItem = UserDefaults.standard.bool(forKey: "showAwakeStatusItem")
-        showsSoundStatusItem = UserDefaults.standard.object(forKey: "showSoundStatusItem") as? Bool ?? true
+        showsSoundStatusItem = UserDefaults.standard.object(forKey: "showSoundStatusItem") as? Bool ?? false
         refreshPermissionStatus(listenerRunning: listenerRunning)
         refreshApplications()
         objectWillChange.send()
@@ -258,6 +303,21 @@ private final class WarpTabSettingsModel: ObservableObject {
         onShowClipboardStatusItemChange(value)
     }
 
+    func setShowsScreenTextInWarpTabMenu(_ value: Bool) {
+        showsScreenTextInWarpTabMenu = value
+        onShowScreenTextInWarpTabMenuChange(value)
+    }
+
+    func setShowsColorPickerInWarpTabMenu(_ value: Bool) {
+        showsColorPickerInWarpTabMenu = value
+        onShowColorPickerInWarpTabMenuChange(value)
+    }
+
+    func setShowsWarpTabStatusItem(_ value: Bool) {
+        showsWarpTabStatusItem = value
+        onShowWarpTabStatusItemChange(value)
+    }
+
     func setStayAwakeEnabled(_ value: Bool) {
         stayAwakeEnabled = value
         onStayAwakeEnabledChange(value)
@@ -286,14 +346,11 @@ private final class WarpTabSettingsModel: ObservableObject {
     func refreshPermissionStatus(listenerRunning: Bool) {
         self.listenerRunning = listenerRunning
         accessibilityGranted = AXIsProcessTrusted()
-        screenRecordingGranted = CGPreflightScreenCaptureAccess()
+        screenRecordingGranted = ScreenRecordingPermission.isGranted
     }
 
     func openScreenRecordingSettings() {
-        guard let url = URL(
-            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        ) else { return }
-        NSWorkspace.shared.open(url)
+        ScreenRecordingPermission.openSettings()
     }
 
     func openSystemAudioRecordingSettings() {
@@ -337,10 +394,12 @@ private final class WarpTabSettingsModel: ObservableObject {
 
 private enum SettingsDestination: String, CaseIterable, Identifiable {
     case windowSwitcher
+    case mouse
     case sound
     case dock
     case windowSnapping
     case stayAwake
+    case screenTools
     case windowsFeatures
     case permissions
     case about
@@ -350,6 +409,8 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
 
 private struct WarpTabSettingsRootView: View {
     @ObservedObject var model: WarpTabSettingsModel
+    @ObservedObject var screenTools: ScreenToolsController
+    @ObservedObject var mousePageModel: MouseSettingsPageModel
 
     var body: some View {
         NavigationSplitView {
@@ -376,8 +437,10 @@ private struct WarpTabSettingsRootView: View {
                     sidebarItem("Window Switcher", symbol: "rectangle.on.rectangle", destination: .windowSwitcher)
                     sidebarItem("Dock", symbol: "dock.rectangle", destination: .dock)
                     sidebarItem("Window Snapping", symbol: "rectangle.split.3x1", destination: .windowSnapping)
+                    sidebarItem("Mouse", symbol: "computermouse", destination: .mouse)
                     sidebarItem("Sound Mixer", symbol: "speaker.wave.2", destination: .sound)
                     sidebarItem("Stay Awake", symbol: "cup.and.saucer", destination: .stayAwake)
+                    sidebarItem("Screen Tools", symbol: "viewfinder", destination: .screenTools)
                     sidebarItem("Windows Extras", symbol: "command", destination: .windowsFeatures)
 
                     sidebarSectionLabel("Permissions", topPadding: 12)
@@ -424,10 +487,25 @@ private struct WarpTabSettingsRootView: View {
             Group {
                 switch model.selection ?? .windowSwitcher {
                 case .windowSwitcher: WindowSwitcherSettingsPage(model: model)
+                case .mouse: MouseSettingsView(pageModel: mousePageModel)
                 case .sound: SoundSettingsPage(model: model)
                 case .dock: DockSettingsPage(model: model)
                 case .windowSnapping: WindowSnappingPage(model: model)
                 case .stayAwake: StayAwakeSettingsPage(model: model)
+                case .screenTools: ScreenToolsSettingsView(
+                    controller: screenTools,
+                    preferences: model.preferences,
+                    screenRecordingGranted: model.screenRecordingGranted,
+                    openScreenRecordingSettings: model.openScreenRecordingSettings,
+                    showsTextCaptureInWarpTabMenu: Binding(
+                        get: { model.showsScreenTextInWarpTabMenu },
+                        set: model.setShowsScreenTextInWarpTabMenu
+                    ),
+                    showsColorPickerInWarpTabMenu: Binding(
+                        get: { model.showsColorPickerInWarpTabMenu },
+                        set: model.setShowsColorPickerInWarpTabMenu
+                    )
+                )
                 case .windowsFeatures: WindowsFeaturesSettingsPage(model: model)
                 case .permissions: PermissionsSettingsPage(model: model)
                 case .about: AboutWarpTabPage()
@@ -632,6 +710,12 @@ private struct WindowSwitcherSettingsPage: View {
             SettingsSection(title: "Appearance") {
                 SwitcherStyleSelector(model: model)
                 Divider()
+                SettingRow("Animations", description: "Use subtle transitions in WarpTab overlays. Turn this off for the lowest possible latency.") {
+                    Toggle("", isOn: model.preferenceBinding(\.animationsEnabled))
+                        .labelsHidden()
+                        .accessibilityLabel("WarpTab animations")
+                }
+                Divider()
                 SettingRow("Show View Style in menu bar", description: "Show the View Style submenu in WarpTab’s menu.") {
                     Toggle("", isOn: Binding(
                         get: { model.showsViewStyleInWarpTabMenu },
@@ -639,6 +723,15 @@ private struct WindowSwitcherSettingsPage: View {
                     ))
                     .labelsHidden()
                     .accessibilityLabel("Show View Style menu item")
+                }
+                Divider()
+                SettingRow("Show WarpTab in menu bar", description: "Show WarpTab’s main menu-bar icon. Open WarpTab from Applications to restore it.") {
+                    Toggle("", isOn: Binding(
+                        get: { model.showsWarpTabStatusItem },
+                        set: model.setShowsWarpTabStatusItem
+                    ))
+                    .labelsHidden()
+                    .accessibilityLabel("Show WarpTab menu bar icon")
                 }
                 Divider()
                 SettingRow("Switcher location", description: "Choose which screen displays the switcher.") {
@@ -839,10 +932,10 @@ private struct NativeTabIllustration: View {
 private struct SoundSettingsPage: View {
     @ObservedObject var model: WarpTabSettingsModel
     @AppStorage("soundShowOnlyPlayingApps") private var showOnlyPlayingApps = true
-    @AppStorage("reduceOnDisconnect") private var reduceOnDisconnect = true
+    @AppStorage("reduceOnDisconnect") private var reduceOnDisconnect = false
     @AppStorage("soundDisconnectVolume") private var disconnectVolume = 0.25
-    @AppStorage("soundPinInput") private var pinInput = true
-    @AppStorage("soundGlobalShortcutsEnabled") private var globalShortcutsEnabled = true
+    @AppStorage("soundPinInput") private var pinInput = false
+    @AppStorage("soundGlobalShortcutsEnabled") private var globalShortcutsEnabled = false
 
     var body: some View {
         SettingsPage(title: "Sound Mixer", description: "Configure WarpTab’s menu bar mixer, outputs, and microphones.") {
@@ -861,6 +954,7 @@ private struct SoundSettingsPage: View {
                     Toggle("", isOn: $showOnlyPlayingApps).labelsHidden()
                 }
             }
+            .disabled(!model.showsSoundStatusItem)
 
             SettingsSection(title: "Outputs") {
                 SettingRow("Lower volume after disconnect", description: "Protect against loud speaker playback when headphones disconnect.") {
@@ -882,18 +976,21 @@ private struct SoundSettingsPage: View {
                 }
                 .disabled(!reduceOnDisconnect)
             }
+            .disabled(!model.showsSoundStatusItem)
 
             SettingsSection(title: "Microphone") {
                 SettingRow("Keep selected input pinned", description: "Restore your chosen microphone if macOS or another app changes it.") {
                     Toggle("", isOn: $pinInput).labelsHidden()
                 }
             }
+            .disabled(!model.showsSoundStatusItem)
 
             SettingsSection(title: "Keyboard") {
                 SettingRow("Sound shortcuts", description: "Use Control–Option–O to cycle favorite outputs and Control–Option–M to mute every microphone.") {
                     Toggle("", isOn: $globalShortcutsEnabled).labelsHidden()
                 }
             }
+            .disabled(!model.showsSoundStatusItem)
         }
     }
 }
@@ -1159,7 +1256,8 @@ private struct SnapMinimizeBehaviorSelector: View {
                 SnapBehaviorCard(
                     title: behavior.displayName,
                     selected: model.preferences.snapMinimizeFocusBehavior == behavior,
-                    illustration: .afterMinimizing(behavior)
+                    illustration: .afterMinimizing(behavior),
+                    animationsEnabled: model.preferences.animationsEnabled
                 ) {
                     model.preferenceBinding(\.snapMinimizeFocusBehavior).wrappedValue = behavior
                 }
@@ -1180,7 +1278,8 @@ private struct SnapUpBehaviorSelector: View {
                 SnapBehaviorCard(
                     title: behavior.displayName,
                     selected: model.preferences.snapUpAfterMinimizeBehavior == behavior,
-                    illustration: .nextUp(behavior)
+                    illustration: .nextUp(behavior),
+                    animationsEnabled: model.preferences.animationsEnabled
                 ) {
                     model.preferenceBinding(\.snapUpAfterMinimizeBehavior).wrappedValue = behavior
                 }
@@ -1227,12 +1326,17 @@ private struct SnapBehaviorCard: View {
     let title: String
     let selected: Bool
     let illustration: SnapBehaviorIllustrationKind
+    let animationsEnabled: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 9) {
-                SnapBehaviorIllustration(kind: illustration, selected: selected)
+                SnapBehaviorIllustration(
+                    kind: illustration,
+                    selected: selected,
+                    animationsEnabled: animationsEnabled
+                )
                     .frame(height: 54)
 
                 HStack(spacing: 7) {
@@ -1269,12 +1373,15 @@ private struct SnapBehaviorCard: View {
 private struct SnapBehaviorIllustration: View {
     let kind: SnapBehaviorIllustrationKind
     let selected: Bool
+    let animationsEnabled: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || !animationsEnabled)) { context in
             let elapsed = context.date.timeIntervalSinceReferenceDate
-            let phase = reduceMotion ? 0.58 : (elapsed.truncatingRemainder(dividingBy: 2.8) / 2.8)
+            let phase = reduceMotion || !animationsEnabled
+                ? 0.58
+                : (elapsed.truncatingRemainder(dividingBy: 2.8) / 2.8)
             illustration(progress: phase)
         }
         .accessibilityHidden(true)
@@ -1630,7 +1737,7 @@ private struct SwitcherStyleIllustration: View {
     }
 }
 
-private struct SettingsPage<Content: View>: View {
+struct SettingsPage<Content: View>: View {
     let title: String
     let description: String
     @ViewBuilder let content: Content
@@ -1669,7 +1776,7 @@ private struct SettingsPage<Content: View>: View {
     }
 }
 
-private struct SettingsSection<Content: View>: View {
+struct SettingsSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
 
@@ -1692,7 +1799,7 @@ private struct SettingsSection<Content: View>: View {
     }
 }
 
-private struct SettingRow<Accessory: View>: View {
+struct SettingRow<Accessory: View>: View {
     let title: String
     let description: String
     @ViewBuilder let accessory: Accessory
@@ -1763,6 +1870,28 @@ private struct ShortcutRecorderRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> SystemShortcutRecorderButton {
         let button = SystemShortcutRecorderButton(shortcut: shortcut)
+        button.onShortcut = { candidate in
+            guard let candidate else { return false }
+            return onShortcut(candidate)
+        }
+        return button
+    }
+
+    func updateNSView(_ button: SystemShortcutRecorderButton, context: Context) {
+        button.onShortcut = { candidate in
+            guard let candidate else { return false }
+            return onShortcut(candidate)
+        }
+        button.setShortcut(shortcut)
+    }
+}
+
+struct OptionalShortcutRecorderRepresentable: NSViewRepresentable {
+    let shortcut: SwitcherShortcut?
+    let onShortcut: (SwitcherShortcut?) -> Bool
+
+    func makeNSView(context: Context) -> SystemShortcutRecorderButton {
+        let button = SystemShortcutRecorderButton(shortcut: shortcut)
         button.onShortcut = onShortcut
         return button
     }
@@ -1773,15 +1902,15 @@ private struct ShortcutRecorderRepresentable: NSViewRepresentable {
     }
 }
 
-private final class SystemShortcutRecorderButton: NSButton {
-    var onShortcut: ((SwitcherShortcut) -> Bool)?
-    private var shortcut: SwitcherShortcut
+final class SystemShortcutRecorderButton: NSButton {
+    var onShortcut: ((SwitcherShortcut?) -> Bool)?
+    private var shortcut: SwitcherShortcut?
     private var isRecording = false
 
-    init(shortcut: SwitcherShortcut) {
+    init(shortcut: SwitcherShortcut?) {
         self.shortcut = shortcut
         super.init(frame: .zero)
-        title = shortcut.displayName
+        title = shortcut?.displayName ?? "Record Shortcut…"
         bezelStyle = .rounded
         controlSize = .regular
         font = .monospacedSystemFont(ofSize: 12.5, weight: .semibold)
@@ -1795,10 +1924,10 @@ private final class SystemShortcutRecorderButton: NSButton {
 
     override var acceptsFirstResponder: Bool { true }
 
-    func setShortcut(_ value: SwitcherShortcut) {
+    func setShortcut(_ value: SwitcherShortcut?) {
         guard !isRecording else { return }
         shortcut = value
-        title = value.displayName
+        title = value?.displayName ?? "Record Shortcut…"
     }
 
     @objc private func beginRecording() {
@@ -1813,6 +1942,14 @@ private final class SystemShortcutRecorderButton: NSButton {
             return
         }
         let modifiers = SwitcherShortcut.carbonModifiers(from: event.modifierFlags)
+        if modifiers == 0,
+           (event.keyCode == UInt16(kVK_Delete) || event.keyCode == UInt16(kVK_ForwardDelete)) {
+            if onShortcut?(nil) == true {
+                shortcut = nil
+                finishRecording()
+            }
+            return
+        }
         guard modifiers != 0 else {
             NSSound.beep()
             showTemporaryMessage("Add a modifier")
@@ -1844,7 +1981,7 @@ private final class SystemShortcutRecorderButton: NSButton {
 
     private func finishRecording() {
         isRecording = false
-        title = shortcut.displayName
+        title = shortcut?.displayName ?? "Record Shortcut…"
         if window?.firstResponder === self { window?.makeFirstResponder(nil) }
     }
 

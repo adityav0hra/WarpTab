@@ -122,10 +122,16 @@ final class ClipboardHistoryStore: ObservableObject {
 private final class ClipboardHistoryPanelController: NSWindowController, NSWindowDelegate {
     private let store: ClipboardHistoryStore
     private let plainTextOnClick: () -> Bool
+    private let animationsEnabled: () -> Bool
 
-    init(store: ClipboardHistoryStore, plainTextOnClick: @escaping () -> Bool) {
+    init(
+        store: ClipboardHistoryStore,
+        plainTextOnClick: @escaping () -> Bool,
+        animationsEnabled: @escaping () -> Bool
+    ) {
         self.store = store
         self.plainTextOnClick = plainTextOnClick
+        self.animationsEnabled = animationsEnabled
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 340, height: 520),
             styleMask: [.titled, .fullSizeContentView],
@@ -147,6 +153,7 @@ private final class ClipboardHistoryPanelController: NSWindowController, NSWindo
         panel.hasShadow = true
         panel.hidesOnDeactivate = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.animationBehavior = animationsEnabled() ? .utilityWindow : .none
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: ClipboardHistoryView(
             store: store,
@@ -166,6 +173,7 @@ private final class ClipboardHistoryPanelController: NSWindowController, NSWindo
 
     func show() {
         guard let window else { return }
+        window.animationBehavior = animationsEnabled() ? .utilityWindow : .none
         let rowCount = min(store.entries.count, 16)
         let contentHeight = store.entries.isEmpty
             ? CGFloat(139)
@@ -210,8 +218,8 @@ private struct ClipboardHistoryView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(store.entries.enumerated()), id: \.element.id) { index, entry in
-                            clipboardRow(entry, index: index)
+                        ForEach(store.entries) { entry in
+                            clipboardRow(entry)
                         }
                     }
                     .padding(.vertical, 5)
@@ -238,9 +246,8 @@ private struct ClipboardHistoryView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    @ViewBuilder
-    private func clipboardRow(_ entry: ClipboardHistoryEntry, index: Int) -> some View {
-        let button = Button {
+    private func clipboardRow(_ entry: ClipboardHistoryEntry) -> some View {
+        Button {
             onSelect(entry)
         } label: {
             HStack(spacing: 10) {
@@ -249,12 +256,6 @@ private struct ClipboardHistoryView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if index < 10 {
-                    Text("⌘\(index)")
-                        .font(.system(size: 11, weight: .regular, design: .rounded))
-                        .foregroundStyle(.tertiary)
-                        .frame(minWidth: 28, alignment: .trailing)
-                }
             }
             .padding(.horizontal, 14)
             .frame(height: 27)
@@ -262,19 +263,15 @@ private struct ClipboardHistoryView: View {
         }
         .buttonStyle(.plain)
         .help("Click to copy; hold Shift to use the alternate formatting mode")
-
-        if index < 10, let character = String(index).first {
-            button.keyboardShortcut(KeyEquivalent(character), modifiers: .command)
-        } else {
-            button
-        }
     }
 }
 
 private final class AccentChooserPanelController: NSWindowController {
     private var onChoose: ((String) -> Void)?
+    private let animationsEnabled: () -> Bool
 
-    init() {
+    init(animationsEnabled: @escaping () -> Bool) {
+        self.animationsEnabled = animationsEnabled
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 260, height: 52),
             styleMask: [.nonactivatingPanel],
@@ -288,12 +285,14 @@ private final class AccentChooserPanelController: NSWindowController {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
+        panel.animationBehavior = animationsEnabled() ? .utilityWindow : .none
     }
 
     required init?(coder: NSCoder) { nil }
 
     func show(characters: [String], onChoose: @escaping (String) -> Void) {
         guard let panel = window else { return }
+        panel.animationBehavior = animationsEnabled() ? .utilityWindow : .none
         self.onChoose = onChoose
         let effect = NSVisualEffectView()
         effect.material = .popover
@@ -351,9 +350,12 @@ final class WindowsBehaviorController {
     private let clipboardStore = ClipboardHistoryStore()
     private lazy var clipboardPanel = ClipboardHistoryPanelController(
         store: clipboardStore,
-        plainTextOnClick: { [weak self] in self?.preferences.clipboardPlainTextOnClick ?? true }
+        plainTextOnClick: { [weak self] in self?.preferences.clipboardPlainTextOnClick ?? true },
+        animationsEnabled: { [weak self] in self?.preferences.animationsEnabled ?? false }
     )
-    private let accentPanel = AccentChooserPanelController()
+    private lazy var accentPanel = AccentChooserPanelController(
+        animationsEnabled: { [weak self] in self?.preferences.animationsEnabled ?? false }
+    )
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var clipboardTimer: Timer?
@@ -365,6 +367,7 @@ final class WindowsBehaviorController {
     private var consumeCloseMouseUp = false
     private var windowsMinimizedByCommandM: [pid_t: [AXUIElement]] = [:]
     private var lastCommandMProcessIdentifier: pid_t?
+    private var started = false
 
     init(preferences: WarpPreferences, store: WindowStore, previewCache: PreviewCache = PreviewCache()) {
         self.preferences = preferences
@@ -378,6 +381,7 @@ final class WindowsBehaviorController {
     }
 
     func start() {
+        started = true
         guard eventTap == nil else { refreshPreferences(); return }
         let mask = [CGEventType.keyDown, .keyUp, .leftMouseDown, .leftMouseUp, systemDefinedEventType]
             .reduce(CGEventMask(0)) {
@@ -397,22 +401,11 @@ final class WindowsBehaviorController {
             CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
             CGEvent.tapEnable(tap: eventTap, enable: true)
         }
-        clipboardTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.clipboardStore.poll(enabled: self.preferences.clipboardHistoryEnabled)
-        }
-        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.willSleepNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self, self.preferences.clearClipboardOnSleep else { return }
-            self.clearClipboard()
-        }
         refreshPreferences()
     }
 
     func stop() {
+        started = false
         clipboardTimer?.invalidate()
         clipboardTimer = nil
         if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
@@ -609,15 +602,45 @@ final class WindowsBehaviorController {
     }
 
     private func refreshPreferences() {
-        guard appliedRepeatPreference != preferences.repeatKeysOnHold else { return }
-        appliedRepeatPreference = preferences.repeatKeysOnHold
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        process.arguments = [
-            "write", "NSGlobalDomain", "ApplePressAndHoldEnabled", "-bool",
-            preferences.repeatKeysOnHold ? "false" : "true"
-        ]
-        try? process.run()
+        if appliedRepeatPreference != preferences.repeatKeysOnHold {
+            appliedRepeatPreference = preferences.repeatKeysOnHold
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+            process.arguments = [
+                "write", "NSGlobalDomain", "ApplePressAndHoldEnabled", "-bool",
+                preferences.repeatKeysOnHold ? "false" : "true"
+            ]
+            try? process.run()
+        }
+
+        guard started else { return }
+        if preferences.clipboardHistoryEnabled {
+            if clipboardTimer == nil {
+                let timer = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
+                    guard let self else { return }
+                    clipboardStore.poll(enabled: preferences.clipboardHistoryEnabled)
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                clipboardTimer = timer
+            }
+            clipboardStore.poll(enabled: true)
+        } else {
+            clipboardTimer?.invalidate()
+            clipboardTimer = nil
+        }
+
+        if preferences.clearClipboardOnSleep {
+            if sleepObserver == nil {
+                sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                    forName: NSWorkspace.willSleepNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in self?.clearClipboard() }
+            }
+        } else if let sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
+            self.sleepObserver = nil
+        }
     }
 
     private func windowButton(at point: CGPoint) -> (kind: WindowButtonKind, processIdentifier: pid_t)? {
@@ -769,11 +792,13 @@ final class WindowsBehaviorController {
 
     private func postUnicode(_ value: String) {
         let units = Array(value.utf16)
+        guard !units.isEmpty else { return }
         for keyDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: keyDown) else { continue }
             event.setIntegerValueField(.eventSourceUserData, value: warpTabSyntheticEventMarker)
             units.withUnsafeBufferPointer { buffer in
-                event.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress!)
+                guard let baseAddress = buffer.baseAddress else { return }
+                event.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: baseAddress)
             }
             event.post(tap: .cghidEventTap)
         }

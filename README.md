@@ -23,6 +23,8 @@ WarpTab gives every window its own entry in a compact, native macOS switcher. Th
 - **Windows-style snapping** — move, resize, maximize, restore, and minimize windows with directional shortcuts, optional cross-display movement, and Snap Assist.
 - **Per-app Sound Mixer** — control application volumes, output devices, microphone state, and protective speaker volume after headphones disconnect.
 - **Windows Extras** — optional Finder shortcuts, clipboard history, familiar key-repeat behavior, and Windows-style window controls.
+- **Screen Tools** — locally recognize text and QR codes from a selected screen region or pick a colour in several copy formats.
+- **Mouse customization** — remap extra buttons and side-wheel gestures to navigation, macOS actions, WarpTab tools, or custom keyboard shortcuts.
 - **Stay Awake** — prevent display or system sleep from WarpTab or its optional menu-bar control.
 - **Hidden, full-screen, and cross-Space windows** — WarpTab keeps discovered windows available and focuses the exact target.
 - **Search and navigation** — type an app or window name, use arrows, reverse with <kbd>⇧</kbd> <kbd>Tab</kbd>, press <kbd>Return</kbd> to switch, or <kbd>Esc</kbd> to cancel.
@@ -51,7 +53,7 @@ Press <kbd>⌥ Option</kbd> <kbd>`</kbd> for the same interaction limited to the
 
 - macOS 13 Ventura or later
 - Accessibility permission for discovering and focusing windows
-- Screen Recording permission only when using Thumbnail view
+- Screen Recording permission only for live switcher, Dock, Snap Assist, or screen-capture previews
 - Audio capture access when using per-application Sound Mixer controls
 - Swift 6 / Xcode Command Line Tools when building from source
 
@@ -60,7 +62,6 @@ Press <kbd>⌥ Option</kbd> <kbd>`</kbd> for the same interaction limited to the
 WarpTab is available from this repository as a Homebrew Cask for Apple Silicon Macs:
 
 ```sh
-brew tap adityav0hra/warptab https://github.com/adityav0hra/WarpTab.git
 brew install --cask adityav0hra/warptab/warptab
 open /Applications/WarpTab.app
 ```
@@ -71,7 +72,9 @@ Upgrade to the latest published version with:
 brew upgrade --cask adityav0hra/warptab/warptab
 ```
 
-The first launch is required to grant Accessibility permission and configure automatic background startup.
+WarpTab installs its background login launch configuration when opened from Applications.
+All optional behavior is disabled on a clean first launch, so WarpTab does not request
+Accessibility access until the user enables a feature that requires it.
 
 ## Build from source
 
@@ -91,15 +94,15 @@ ditto dist/WarpTab.app /Applications/WarpTab.app
 open /Applications/WarpTab.app
 ```
 
-Because local builds are not notarized, macOS may ask you to confirm the first launch.
+macOS may ask you to confirm the first launch of a locally built copy.
 
 ## Permissions
 
-On first launch, grant WarpTab access in:
+When enabling window-management features, grant WarpTab access in:
 
 **System Settings → Privacy & Security → Accessibility**
 
-WarpTab detects the permission automatically and displays **Active** when window switching is ready. Thumbnail view may additionally prompt for Screen Recording access so it can render window previews.
+WarpTab detects the permission automatically and displays **Active** when window switching is ready. Features that render live window or screen content also need Screen Recording access.
 
 ## Settings
 
@@ -139,7 +142,8 @@ Bug reports and focused pull requests are welcome. Run `./scripts/test-engine.sh
 
 ## License
 
-WarpTab is source-available under a [proprietary license](LICENSE). Personal,
-non-commercial use and private modification are permitted. Publishing,
-redistribution, sublicensing, selling, and distributing modified copies are
-not permitted without prior written permission.
+WarpTab is source-available under a [proprietary license](LICENSE). Personal and
+internal business use, including installation across devices controlled by one
+organization, is permitted. Publishing, redistribution, sublicensing, resale,
+providing WarpTab as a paid service, and distributing modified copies are not
+permitted without prior written permission.

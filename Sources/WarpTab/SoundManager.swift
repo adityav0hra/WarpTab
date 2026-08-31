@@ -14,10 +14,10 @@ final class SoundManager: ObservableObject {
     @Published var outputMuted = false
     @Published var microphonesMuted = false
     @Published var favorites: Set<String> = [] { didSet { saveFavorites() } }
-    @Published var reduceOnDisconnect = true { didSet { defaults.set(reduceOnDisconnect, forKey: Keys.reduceOnDisconnect) } }
+    @Published var reduceOnDisconnect = false { didSet { defaults.set(reduceOnDisconnect, forKey: Keys.reduceOnDisconnect) } }
     @Published private(set) var disconnectVolume = 0.25
-    @Published private(set) var pinInput = true
-    @Published private(set) var globalShortcutsEnabled = true
+    @Published private(set) var pinInput = false
+    @Published private(set) var globalShortcutsEnabled = false
     @Published var errorMessage: String?
 
     private let service = CoreAudioService()
@@ -26,6 +26,7 @@ final class SoundManager: ObservableObject {
     private var shortcutMonitor: GlobalShortcutMonitor?
     private var previousOutput: AudioDevice?
     private var perAppAudioEngineStorage: AnyObject?
+    private var isInterfaceVisible = false
 
     private enum Keys {
         static let appPreferences = "appAudioPreferences"
@@ -39,13 +40,16 @@ final class SoundManager: ObservableObject {
 
     init() {
         favorites = Set(defaults.stringArray(forKey: Keys.favorites) ?? [])
-        reduceOnDisconnect = defaults.object(forKey: Keys.reduceOnDisconnect) as? Bool ?? true
+        reduceOnDisconnect = defaults.object(forKey: Keys.reduceOnDisconnect) as? Bool ?? false
         disconnectVolume = defaults.object(forKey: Keys.disconnectVolume) as? Double ?? 0.25
-        pinInput = defaults.object(forKey: Keys.pinInput) as? Bool ?? true
-        globalShortcutsEnabled = defaults.object(forKey: Keys.globalShortcutsEnabled) as? Bool ?? true
-        refresh()
+        pinInput = defaults.object(forKey: Keys.pinInput) as? Bool ?? false
+        globalShortcutsEnabled = defaults.object(forKey: Keys.globalShortcutsEnabled) as? Bool ?? false
+        refresh(includeApps: false)
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.refresh(includeApps: self.isInterfaceVisible)
+            }
         }
         updateShortcutMonitor()
     }
@@ -55,7 +59,7 @@ final class SoundManager: ObservableObject {
     var selectedOutput: AudioDevice? { outputs.first { $0.id == selectedOutputID } }
     var selectedInput: AudioDevice? { inputs.first { $0.id == selectedInputID } }
 
-    func refresh() {
+    func refresh(includeApps: Bool = false) {
         syncPreferences()
         do {
             let oldOutput = selectedOutput
@@ -69,7 +73,7 @@ final class SoundManager: ObservableObject {
                 outputMuted = service.isMuted(outputID, scope: kAudioDevicePropertyScopeOutput)
             }
             microphonesMuted = !inputs.isEmpty && inputs.allSatisfy { service.isMuted($0.id, scope: kAudioDevicePropertyScopeInput) }
-            if #available(macOS 14.2, *) {
+            if includeApps, #available(macOS 14.2, *) {
                 apps = service.audioApps()
                 perAppAudioEngine().removeMissingApps(Set(apps.map(\.bundleIdentifier)))
             }
@@ -79,6 +83,11 @@ final class SoundManager: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func setInterfaceVisible(_ visible: Bool) {
+        isInterfaceVisible = visible
+        if visible { refresh(includeApps: true) }
     }
 
     func setOutputVolume(_ value: Double) {
@@ -206,10 +215,10 @@ final class SoundManager: ObservableObject {
     }
 
     private func syncPreferences() {
-        reduceOnDisconnect = defaults.object(forKey: Keys.reduceOnDisconnect) as? Bool ?? true
+        reduceOnDisconnect = defaults.object(forKey: Keys.reduceOnDisconnect) as? Bool ?? false
         disconnectVolume = defaults.object(forKey: Keys.disconnectVolume) as? Double ?? 0.25
-        pinInput = defaults.object(forKey: Keys.pinInput) as? Bool ?? true
-        let shortcutsEnabled = defaults.object(forKey: Keys.globalShortcutsEnabled) as? Bool ?? true
+        pinInput = defaults.object(forKey: Keys.pinInput) as? Bool ?? false
+        let shortcutsEnabled = defaults.object(forKey: Keys.globalShortcutsEnabled) as? Bool ?? false
         if shortcutsEnabled != globalShortcutsEnabled {
             globalShortcutsEnabled = shortcutsEnabled
             updateShortcutMonitor()

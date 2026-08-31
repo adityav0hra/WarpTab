@@ -101,6 +101,7 @@ enum SnapAssistLayout: String, CaseIterable {
 final class WarpPreferences {
     var onChange: (() -> Void)?
     var onWindowsBehaviorChange: (() -> Void)?
+    var onFeatureChange: (() -> Void)?
 
     private let defaults: UserDefaults
 
@@ -114,9 +115,9 @@ final class WarpPreferences {
         set { set(newValue, forKey: "searchEnabled") }
     }
 
-    var previewsEnabled: Bool {
-        get { defaults.bool(forKey: "previewsEnabled") }
-        set { set(newValue, forKey: "previewsEnabled") }
+    var animationsEnabled: Bool {
+        get { defaults.bool(forKey: "animationsEnabled") }
+        set { set(newValue, forKey: "animationsEnabled") }
     }
 
     var dockPreviewsEnabled: Bool {
@@ -283,6 +284,41 @@ final class WarpPreferences {
         set { setWindowsBehavior(newValue, forKey: "commandMMinimizesAllWindows") }
     }
 
+    var screenTextCaptureShortcutStorageValue: String? {
+        get { defaults.string(forKey: "screenTextCaptureShortcut") }
+        set {
+            defaults.set(newValue, forKey: "screenTextCaptureShortcut")
+            onChange?()
+            onFeatureChange?()
+        }
+    }
+
+    var detectScreenQRCodes: Bool {
+        get { defaults.bool(forKey: "detectScreenQRCodes") }
+        set { set(newValue, forKey: "detectScreenQRCodes") }
+    }
+
+    var screenColorPickerShortcutStorageValue: String? {
+        get { defaults.string(forKey: "screenColorPickerShortcut") }
+        set {
+            defaults.set(newValue, forKey: "screenColorPickerShortcut")
+            onChange?()
+            onFeatureChange?()
+        }
+    }
+
+    var screenColorCopyFormat: ScreenColorCopyFormat {
+        get {
+            ScreenColorCopyFormat(rawValue: defaults.string(forKey: "screenColorCopyFormat") ?? "") ?? .hex
+        }
+        set { set(newValue.rawValue, forKey: "screenColorCopyFormat") }
+    }
+
+    var screenColorAutomaticallyCopies: Bool {
+        get { defaults.bool(forKey: "screenColorAutomaticallyCopies") }
+        set { set(newValue, forKey: "screenColorAutomaticallyCopies") }
+    }
+
     var windowSnappingEnabled: Bool {
         get { defaults.bool(forKey: "windowSnappingEnabled") }
         set { setWindowsBehavior(newValue, forKey: "windowSnappingEnabled") }
@@ -381,49 +417,55 @@ final class WarpPreferences {
 
     private func registerDefaults() {
         defaults.register(defaults: [
-            "searchEnabled": true,
-            "previewsEnabled": true,
-            "dockPreviewsEnabled": true,
-            "dockPreviewCloseEnabled": true,
+            "searchEnabled": false,
+            "animationsEnabled": false,
+            "dockPreviewsEnabled": false,
+            "dockPreviewCloseEnabled": false,
             "quitAppWhenLastWindowClosed": false,
             "dockPreviewSize": DockPreviewSize.default.rawValue,
-            "dockPreviewShowMinimized": true,
-            "dockPreviewShowHiddenApplications": true,
-            "dockPreviewShowFullscreen": true,
-            "minimizeFrontmostWindowOnDockClick": true,
-            "chooseWindowOnMultiWindowDockClick": true,
-            "minimizeAllWindowsOnDockDoubleClick": true,
+            "dockPreviewShowMinimized": false,
+            "dockPreviewShowHiddenApplications": false,
+            "dockPreviewShowFullscreen": false,
+            "minimizeFrontmostWindowOnDockClick": false,
+            "chooseWindowOnMultiWindowDockClick": false,
+            "minimizeAllWindowsOnDockDoubleClick": false,
             "dockDoubleClickMinimizeScope": DockDoubleClickMinimizeScope.allWindows.rawValue,
-            "showMinimizedWindows": true,
-            "showHiddenApplications": true,
-            "showFullscreenWindows": true,
-            "showOtherSpaces": true,
+            "showMinimizedWindows": false,
+            "showHiddenApplications": false,
+            "showFullscreenWindows": false,
+            "showOtherSpaces": false,
             "showWindowlessApps": false,
             "screenPlacement": SwitcherScreenPlacement.activeWindow.rawValue,
             "displayScope": WindowDisplayScope.allDisplays.rawValue,
             "nativeTabBehavior": NativeTabBehavior.grouped.rawValue,
-            "dockAppShortcutsEnabled": true,
-            "finderCutPasteEnabled": true,
-            "finderF2RenameEnabled": true,
-            "clipboardHistoryEnabled": true,
-            "clipboardPlainTextOnClick": true,
+            "dockAppShortcutsEnabled": false,
+            "finderCutPasteEnabled": false,
+            "finderF2RenameEnabled": false,
+            "clipboardHistoryEnabled": false,
+            "clipboardPlainTextOnClick": false,
             "clearClipboardOnSleep": false,
-            "repeatKeysOnHold": true,
-            "controlAccentChooserEnabled": true,
+            "repeatKeysOnHold": false,
+            "controlAccentChooserEnabled": false,
             "greenButtonMaximizes": false,
-            "shiftGreenUsesFullScreen": true,
+            "shiftGreenUsesFullScreen": false,
             "quitOnLastWindowClose": false,
-            "shiftCloseKeepsAppRunning": true,
-            "commandMMinimizesAllWindows": true,
-            "windowSnappingEnabled": true,
+            "shiftCloseKeepsAppRunning": false,
+            "commandMMinimizesAllWindows": false,
+            "detectScreenQRCodes": false,
+            "screenColorCopyFormat": ScreenColorCopyFormat.hex.rawValue,
+            "screenColorAutomaticallyCopies": false,
+            "windowSnappingEnabled": false,
             "activateWindowBehindAfterSnapMinimize": true,
             "snapUpRestoresLastMinimizedWindow": true,
             "snapMinimizeFocusBehavior": SnapMinimizeFocusBehavior.activateWindowBehind.rawValue,
             "snapUpAfterMinimizeBehavior": SnapUpAfterMinimizeBehavior.restoreMinimizedWindow.rawValue,
-            "windowSnapMoveAcrossDisplays": true,
-            "windowSnapAssistEnabled": true,
+            "windowSnapMoveAcrossDisplays": false,
+            "windowSnapAssistEnabled": false,
             "snapAssistLayout": SnapAssistLayout.thumbnails.rawValue,
-            "showViewStyleInWarpTabMenu": true,
+            "showViewStyleInWarpTabMenu": false,
+            "showScreenTextInWarpTabMenu": false,
+            "showColorPickerInWarpTabMenu": false,
+            "showWarpTabStatusItem": true,
             "excludedBundleIdentifiers": []
         ])
     }
@@ -431,6 +473,7 @@ final class WarpPreferences {
     private func set(_ value: Any, forKey key: String) {
         defaults.set(value, forKey: key)
         onChange?()
+        onFeatureChange?()
     }
 
     private func setWindowsBehavior(_ value: Any, forKey key: String) {

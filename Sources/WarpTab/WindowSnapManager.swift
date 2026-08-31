@@ -76,7 +76,7 @@ final class WindowSnapManager {
         screenGeometry: ScreenGeometryService = ScreenGeometryService()
     ) {
         self.store = store
-        self.snapAssist = SnapAssistController(previewCache: previewCache)
+        self.snapAssist = SnapAssistController(previewCache: previewCache, preferences: store.preferences)
         self.restoreStore = restoreStore
         self.screenGeometry = screenGeometry
     }
@@ -237,12 +237,12 @@ final class WindowSnapManager {
     }
 
     private func frame(of element: AXUIElement) -> CGRect? {
-        guard let positionValue = attribute(element, kAXPositionAttribute),
-              let sizeValue = attribute(element, kAXSizeAttribute) else { return nil }
+        guard let positionValue = warpAXValue(attribute(element, kAXPositionAttribute)),
+              let sizeValue = warpAXValue(attribute(element, kAXSizeAttribute)) else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size),
+        guard AXValueGetValue(positionValue, .cgPoint, &position),
+              AXValueGetValue(sizeValue, .cgSize, &size),
               size.width > 0, size.height > 0 else { return nil }
         return CGRect(origin: position, size: size)
     }

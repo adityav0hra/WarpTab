@@ -1,0 +1,39 @@
+name: Validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-tests:
+    name: macOS ${{ matrix.macos }}
+    runs-on: macos-${{ matrix.macos }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        macos: [14, 15, 26]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build release executable
+        run: swift build -c release
+
+      - name: Test window engine
+        run: ./scripts/test-engine.sh
+
+      - name: Test mouse preferences and geometry
+        run: ./scripts/test-mouse.sh
+
+      - name: Test Screen Tools logic
+        run: ./scripts/test-screen-tools.sh

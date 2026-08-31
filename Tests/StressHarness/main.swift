@@ -76,6 +76,19 @@ let latency = CFAbsoluteTimeGetCurrent() - start
 // against a still-busy test process (physical keyboard input is naturally slower).
 wait(0.2)
 
+// Cross several rendered-page boundaries before searching. This verifies that
+// large collections remain fully keyboard-addressable even though the AppKit
+// view hierarchy only retains a bounded set of rows around the selection.
+for _ in 0..<min(count + 3, 105) {
+    press(48)
+}
+wait(0.1)
+guard overlayWindow() != nil else {
+    postKey(58, down: false, flags: [])
+    fputs("overlay disappeared while cycling through \(count) windows\n", stderr)
+    exit(1)
+}
+
 let query = "stress \(String(format: "%03d", count))"
 for character in query {
     guard let keyCode = keyCodes[character] else { continue }
@@ -96,8 +109,8 @@ guard text.contains(String(format: "%03d", count)) else {
     fputs("last window was not searchable for \(count) windows; OCR=\(text)\n", stderr)
     exit(1)
 }
-guard latency < 1 else {
-    fputs("overlay latency \(latency)s exceeded 1s for \(count) windows\n", stderr)
+guard latency < 0.35 else {
+    fputs("overlay latency \(latency)s exceeded 350ms for \(count) windows\n", stderr)
     exit(1)
 }
 print(String(format: "%d windows: %.3fs overlay latency, last window searchable", count, latency))

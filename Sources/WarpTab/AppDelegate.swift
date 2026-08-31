@@ -21,9 +21,12 @@ private func handleSoundMixerDarwinNotification(
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let isBackgroundLaunch = CommandLine.arguments.contains("--background")
     private let preferences = WarpPreferences()
+    private let mouseSettings = MouseSettings()
+    private lazy var mouseEventManager = MouseEventManager(settings: mouseSettings)
     private let previewCache = PreviewCache()
     private lazy var store = WindowStore(preferences: preferences)
     private var configuredShortcut: SwitcherShortcut {
@@ -37,7 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store: store,
         shortcut: configuredShortcut,
         layout: configuredLayout,
-        previewCache: previewCache
+        previewCache: previewCache,
+        preferences: preferences
     )
     private lazy var dockPreviews = DockPreviewController(
         store: store,
@@ -49,16 +53,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store: store,
         previewCache: previewCache
     )
+    private lazy var screenTools = ScreenToolsController(preferences: preferences)
     private let awakeController = AwakeController()
-    private var awakeFeatureEnabled = UserDefaults.standard.object(forKey: "stayAwakeFeatureEnabled") as? Bool ?? true
-    private var showsAwakeInWarpTabMenu = UserDefaults.standard.object(forKey: "showAwakeInWarpTabMenu") as? Bool ?? true
-    private var showsViewStyleInWarpTabMenu = UserDefaults.standard.object(forKey: "showViewStyleInWarpTabMenu") as? Bool ?? true
-    private var showsClipboardInWarpTabMenu = UserDefaults.standard.object(forKey: "showClipboardInWarpTabMenu") as? Bool ?? true
+    private var awakeFeatureEnabled = UserDefaults.standard.object(forKey: "stayAwakeFeatureEnabled") as? Bool ?? false
+    private var showsAwakeInWarpTabMenu = UserDefaults.standard.object(forKey: "showAwakeInWarpTabMenu") as? Bool ?? false
+    private var showsViewStyleInWarpTabMenu = UserDefaults.standard.object(forKey: "showViewStyleInWarpTabMenu") as? Bool ?? false
+    private var showsClipboardInWarpTabMenu = UserDefaults.standard.object(forKey: "showClipboardInWarpTabMenu") as? Bool ?? false
+    private var showsScreenTextInWarpTabMenu = UserDefaults.standard.object(forKey: "showScreenTextInWarpTabMenu") as? Bool ?? false
+    private var showsColorPickerInWarpTabMenu = UserDefaults.standard.object(forKey: "showColorPickerInWarpTabMenu") as? Bool ?? false
+    private var showsWarpTabStatusItem = UserDefaults.standard.object(forKey: "showWarpTabStatusItem") as? Bool ?? true
     private var showsClipboardStatusItem: Bool {
         UserDefaults.standard.bool(forKey: "showClipboardStatusItem")
     }
     private var showsSoundStatusItem: Bool {
-        UserDefaults.standard.object(forKey: "showSoundStatusItem") as? Bool ?? true
+        UserDefaults.standard.object(forKey: "showSoundStatusItem") as? Bool ?? false
     }
     // The global hotkey owns this callback for the full application lifetime.
     // Capture strongly so the switcher controller cannot disappear while the
@@ -66,35 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var monitor = ShortcutMonitor(shortcut: configuredShortcut) { event in
         self.handle(event)
     }
-    private lazy var settingsWindow = SystemSettingsWindowController(
-        preferences: preferences,
-        store: store,
-        initiallyEnabled: UserDefaults.standard.object(forKey: "switcherEnabled") as? Bool ?? true,
-        initiallySelectedShortcut: configuredShortcut,
-        initiallySelectedLayout: configuredLayout,
-        initiallyEnablesStayAwake: awakeFeatureEnabled,
-        initiallyShowsAwakeInWarpTabMenu: showsAwakeInWarpTabMenu,
-        initiallyShowsViewStyleInWarpTabMenu: showsViewStyleInWarpTabMenu,
-        initiallyShowsClipboardInWarpTabMenu: showsClipboardInWarpTabMenu,
-        initiallyShowsClipboardStatusItem: showsClipboardStatusItem,
-        initiallyShowsAwakeStatusItem: UserDefaults.standard.bool(forKey: "showAwakeStatusItem"),
-        initiallyShowsSoundStatusItem: UserDefaults.standard.object(forKey: "showSoundStatusItem") as? Bool ?? true,
-        onEnabledChange: { [weak self] enabled in self?.setSwitcherEnabled(enabled) },
-        onShortcutChange: { [weak self] shortcut in self?.setShortcut(shortcut) ?? false },
-        onLayoutChange: { [weak self] layout in self?.setLayout(layout) },
-        onStayAwakeEnabledChange: { [weak self] enabled in self?.setStayAwakeFeatureEnabled(enabled) },
-        onShowAwakeInWarpTabMenuChange: { [weak self] visible in self?.setAwakeMenuItemVisible(visible) },
-        onShowViewStyleInWarpTabMenuChange: { [weak self] visible in self?.setViewStyleMenuItemVisible(visible) },
-        onShowClipboardInWarpTabMenuChange: { [weak self] visible in self?.setClipboardMenuItemVisible(visible) },
-        onShowClipboardStatusItemChange: { [weak self] visible in self?.setClipboardStatusItemVisible(visible) },
-        onShowAwakeStatusItemChange: { [weak self] visible in self?.setAwakeStatusItemVisible(visible) },
-        onShowSoundStatusItemChange: { [weak self] visible in
-            Task { @MainActor in self?.setSoundStatusItemVisible(visible) }
-        },
-        onClearClipboard: { [weak self] in self?.windowsBehaviors.clearClipboard() },
-        onOpenAccessibility: { [weak self] in self?.openAccessibilitySettings() },
-        onClose: { [weak self] in self?.settingsDidClose() }
-    )
+    private var settingsWindow: SystemSettingsWindowController?
     private var statusItem: NSStatusItem?
     private var awakeStatusItem: NSStatusItem?
     private var clipboardStatusItem: NSStatusItem?
@@ -103,14 +83,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var thumbnailLayoutMenuItem: NSMenuItem?
     private var awakeMenuItem: NSMenuItem?
     private var clipboardMenuItem: NSMenuItem?
+    private var screenTextMenuItem: NSMenuItem?
+    private var colorPickerMenuItem: NSMenuItem?
     private var viewStyleMenuItem: NSMenuItem?
     private var viewStyleSeparatorMenuItem: NSMenuItem?
     private var permissionTimer: Timer?
+    private var windowStoreRunning = false
+    private var dockPreviewsRunning = false
+    private var windowsBehaviorsRunning = false
+    private var mouseMonitorRunning = false
+    private var screenToolsRunning = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.applicationIconImage = AppIcon.make()
+        preferences.onFeatureChange = { [weak self] in
+            Task { @MainActor in self?.refreshFeatureLifecycles(requestPermission: true) }
+        }
+        mouseSettings.onEnabledChange = { [weak self] _ in
+            Task { @MainActor in self?.refreshFeatureLifecycles() }
+        }
         configureMainMenu()
-        configureStatusItem()
+        if showsWarpTabStatusItem { configureStatusItem() }
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             Unmanaged.passUnretained(self).toOpaque(),
@@ -120,25 +113,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .deliverImmediately
         )
         updateClipboardStatusItemPresence()
-        updateSoundStatusItemPresence()
+        if showsSoundStatusItem { updateSoundStatusItemPresence() }
         if CommandLine.arguments.contains("--show-sound-preview") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.soundStatusItemController?.showPreviewWindow()
+                self?.soundController(createIfNeeded: true)?.showPreviewWindow()
             }
         }
         ensureLaunchAtLoginEnabled()
-        if isBackgroundLaunch {
-            _ = AXIsProcessTrusted()
-        } else {
-            requestAccessibilityPermission()
-        }
-        store.start()
-        dockPreviews.start()
-        windowsBehaviors.start()
-        ensureMonitorStarted()
-        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.ensureMonitorStarted()
-        }
+        refreshFeatureLifecycles(requestPermission: !isBackgroundLaunch)
         if !isBackgroundLaunch {
             showSettings()
         }
@@ -167,14 +149,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         permissionTimer?.invalidate()
         awakeController.stop()
-        monitor.stop()
-        dockPreviews.stop()
-        windowsBehaviors.stop()
-        store.stop()
+        if monitor.isRunning { monitor.stop() }
+        if mouseMonitorRunning { mouseEventManager.stop() }
+        if dockPreviewsRunning { dockPreviews.stop() }
+        if windowsBehaviorsRunning { windowsBehaviors.stop() }
+        if screenToolsRunning { screenTools.stop() }
+        if windowStoreRunning { store.stop() }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        ensureMonitorStarted()
+        refreshFeatureLifecycles()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -190,14 +174,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(_ event: ShortcutEvent) {
         switch event {
         case .cycle(let backwards, let scope):
+            guard isSwitcherEnabled else { return }
             switcher.cycle(backwards: backwards, scope: scope)
         case .navigate(let direction):
+            guard isSwitcherEnabled else { return }
             switcher.navigate(direction)
         case .searchCharacter(let character):
+            guard isSwitcherEnabled else { return }
             switcher.appendSearchCharacter(character)
         case .deleteSearchCharacter:
+            guard isSwitcherEnabled else { return }
             switcher.deleteSearchCharacter()
         case .action(let action):
+            guard isSwitcherEnabled else { return }
             switcher.perform(action)
         case .commit:
             switcher.commitSelection()
@@ -259,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureStatusItem() {
+        guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let symbol = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "WarpTab")
         item.button?.image = symbol?.withSymbolConfiguration(
@@ -286,6 +276,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         clipboardItem.isHidden = !showsClipboardInWarpTabMenu
         menu.addItem(clipboardItem)
         clipboardMenuItem = clipboardItem
+
+        let screenTextItem = NSMenuItem(
+            title: "Copy Text from Screen",
+            action: #selector(copyTextFromScreenFromMenu),
+            keyEquivalent: ""
+        )
+        screenTextItem.target = self
+        screenTextItem.isHidden = !showsScreenTextInWarpTabMenu
+        menu.addItem(screenTextItem)
+        screenTextMenuItem = screenTextItem
+
+        let colorPickerItem = NSMenuItem(
+            title: "Pick Color from Screen",
+            action: #selector(pickColorFromScreenFromMenu),
+            keyEquivalent: ""
+        )
+        colorPickerItem.target = self
+        colorPickerItem.isHidden = !showsColorPickerInWarpTabMenu
+        menu.addItem(colorPickerItem)
+        colorPickerMenuItem = colorPickerItem
 
         let awakeItem = NSMenuItem(
             title: "Keep Mac Awake",
@@ -367,6 +377,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateClipboardStatusItemPresence()
     }
 
+    private func setScreenTextMenuItemVisible(_ visible: Bool) {
+        showsScreenTextInWarpTabMenu = visible
+        UserDefaults.standard.set(visible, forKey: "showScreenTextInWarpTabMenu")
+        screenTextMenuItem?.isHidden = !visible
+    }
+
+    private func setColorPickerMenuItemVisible(_ visible: Bool) {
+        showsColorPickerInWarpTabMenu = visible
+        UserDefaults.standard.set(visible, forKey: "showColorPickerInWarpTabMenu")
+        colorPickerMenuItem?.isHidden = !visible
+    }
+
+    private func setWarpTabStatusItemVisible(_ visible: Bool) {
+        showsWarpTabStatusItem = visible
+        UserDefaults.standard.set(visible, forKey: "showWarpTabStatusItem")
+        if visible {
+            configureStatusItem()
+        } else if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+            self.statusItem = nil
+            clipboardMenuItem = nil
+            screenTextMenuItem = nil
+            colorPickerMenuItem = nil
+            awakeMenuItem = nil
+            viewStyleMenuItem = nil
+            viewStyleSeparatorMenuItem = nil
+            listLayoutMenuItem = nil
+            thumbnailLayoutMenuItem = nil
+        }
+    }
+
     private func updateClipboardStatusItemPresence() {
         if showsClipboardStatusItem {
             guard clipboardStatusItem == nil else { return }
@@ -396,15 +437,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func updateSoundStatusItemPresence() {
-        if soundStatusItemController == nil {
-            soundStatusItemController = SoundStatusItemController(
-                showMenuBarItem: showsSoundStatusItem
-            ) { [weak self] in
-                self?.showSoundSettings()
-            }
+        if showsSoundStatusItem {
+            soundController(createIfNeeded: true)?.setMenuBarItemVisible(true)
         } else {
-            soundStatusItemController?.setMenuBarItemVisible(showsSoundStatusItem)
+            soundStatusItemController?.removeFromMenuBar()
+            soundStatusItemController = nil
         }
+    }
+
+    @MainActor
+    private func soundController(createIfNeeded: Bool) -> SoundStatusItemController? {
+        if soundStatusItemController == nil, createIfNeeded {
+            soundStatusItemController = SoundStatusItemController(
+                showMenuBarItem: showsSoundStatusItem,
+                animationsEnabled: preferences.animationsEnabled,
+                onOpenSettings: { [weak self] in self?.showSoundSettings() },
+                onDismiss: { [weak self] in
+                    guard let self, !showsSoundStatusItem else { return }
+                    soundStatusItemController = nil
+                }
+            )
+        }
+        return soundStatusItemController
     }
 
     private func updateAwakeStatusItemPresence() {
@@ -466,26 +520,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setSwitcherEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "switcherEnabled")
-        if enabled {
-            ensureMonitorStarted()
-        } else {
-            monitor.stop()
-            settingsWindow.refreshPermissionStatus(listenerRunning: false)
-        }
+        refreshFeatureLifecycles(requestPermission: enabled)
     }
 
     private func setShortcut(_ shortcut: SwitcherShortcut) -> Bool {
         guard monitor.changeShortcut(to: shortcut) else { return false }
         UserDefaults.standard.set(shortcut.storageValue, forKey: "customShortcut")
         switcher.updateShortcut(shortcut)
-        settingsWindow.refreshPermissionStatus(listenerRunning: monitor.isRunning)
+        settingsWindow?.refreshPermissionStatus(listenerRunning: monitor.isRunning)
         return true
     }
 
     private func setLayout(_ layout: SwitcherLayout) {
         UserDefaults.standard.set(layout.rawValue, forKey: "switcherLayout")
         switcher.updateLayout(layout)
-        settingsWindow.updateLayoutSelection(layout)
+        settingsWindow?.updateLayoutSelection(layout)
         listLayoutMenuItem?.state = layout == .list ? .on : .off
         thumbnailLayoutMenuItem?.state = layout == .thumbnails ? .on : .off
         if layout == .thumbnails, !CGPreflightScreenCaptureAccess() {
@@ -507,16 +556,202 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func ensureMonitorStarted() {
-        let enabled = UserDefaults.standard.object(forKey: "switcherEnabled") as? Bool ?? true
+        let enabled = UserDefaults.standard.object(forKey: "switcherEnabled") as? Bool ?? false
         guard enabled else {
-            settingsWindow.refreshPermissionStatus(listenerRunning: false)
+            if monitor.isRunning { monitor.stop() }
+            settingsWindow?.refreshPermissionStatus(listenerRunning: false)
             return
         }
 
         if !monitor.isRunning {
             _ = monitor.start()
         }
-        settingsWindow.refreshPermissionStatus(listenerRunning: monitor.isRunning)
+        settingsWindow?.refreshPermissionStatus(listenerRunning: monitor.isRunning)
+    }
+
+    private var isSwitcherEnabled: Bool {
+        UserDefaults.standard.object(forKey: "switcherEnabled") as? Bool ?? false
+    }
+
+    private var needsWindowsBehaviorTap: Bool {
+        preferences.dockAppShortcutsEnabled ||
+            preferences.finderCutPasteEnabled ||
+            preferences.finderF2RenameEnabled ||
+            preferences.clipboardHistoryEnabled ||
+            preferences.clearClipboardOnSleep ||
+            preferences.repeatKeysOnHold ||
+            preferences.controlAccentChooserEnabled ||
+            preferences.greenButtonMaximizes ||
+            preferences.quitOnLastWindowClose ||
+            preferences.commandMMinimizesAllWindows ||
+            preferences.windowSnappingEnabled
+    }
+
+    private var hasScreenToolShortcut: Bool {
+        preferences.screenTextCaptureShortcutStorageValue != nil ||
+            preferences.screenColorPickerShortcutStorageValue != nil
+    }
+
+    private func refreshFeatureLifecycles(requestPermission: Bool = false) {
+        let switcherEnabled = isSwitcherEnabled
+        let dockEnabled = preferences.dockPreviewsEnabled
+        let behaviorsEnabled = needsWindowsBehaviorTap
+        let mouseEnabled = mouseSettings.isEnabled
+        let needsAccessibility = switcherEnabled || dockEnabled || behaviorsEnabled || mouseEnabled
+        let trusted = AXIsProcessTrusted()
+
+        if switcherEnabled { switcher.updateAnimationsEnabled(preferences.animationsEnabled) }
+        if dockEnabled { dockPreviews.updateAnimationsEnabled(preferences.animationsEnabled) }
+        soundStatusItemController?.setAnimationsEnabled(preferences.animationsEnabled)
+
+        if hasScreenToolShortcut {
+            if !screenToolsRunning {
+                screenTools.start()
+                screenToolsRunning = true
+            }
+        } else if screenToolsRunning {
+            screenTools.stop()
+            screenToolsRunning = false
+        }
+
+        guard trusted || !needsAccessibility else {
+            stopAccessibilityFeatures()
+            if requestPermission { requestAccessibilityPermission() }
+            schedulePermissionRetry()
+            settingsWindow?.refreshPermissionStatus(listenerRunning: false)
+            return
+        }
+
+        let needsStore = switcherEnabled || dockEnabled || preferences.windowSnappingEnabled
+        if needsStore, !windowStoreRunning {
+            store.start()
+            windowStoreRunning = true
+        } else if !needsStore, windowStoreRunning {
+            store.stop()
+            windowStoreRunning = false
+        }
+
+        if switcherEnabled {
+            ensureMonitorStarted()
+        } else if monitor.isRunning {
+            monitor.stop()
+            switcher.cancel()
+        }
+
+        if dockEnabled, !dockPreviewsRunning {
+            dockPreviews.start()
+            dockPreviewsRunning = true
+        } else if !dockEnabled, dockPreviewsRunning {
+            dockPreviews.stop()
+            dockPreviewsRunning = false
+        }
+
+        if behaviorsEnabled {
+            if !windowsBehaviorsRunning || !windowsBehaviors.isRunning {
+                windowsBehaviors.start()
+                windowsBehaviorsRunning = true
+            }
+        } else if windowsBehaviorsRunning {
+            windowsBehaviors.stop()
+            windowsBehaviorsRunning = false
+        }
+
+        if mouseEnabled {
+            if !mouseEventManager.isRunning {
+                mouseMonitorRunning = mouseEventManager.start()
+            } else {
+                mouseMonitorRunning = true
+            }
+        } else if mouseMonitorRunning {
+            mouseEventManager.stop()
+            mouseMonitorRunning = false
+        }
+
+        let needsRetry = needsAccessibility && (
+            (switcherEnabled && !monitor.isRunning) ||
+                (behaviorsEnabled && !windowsBehaviors.isRunning) ||
+                (mouseEnabled && !mouseEventManager.isRunning)
+        )
+        if needsRetry { schedulePermissionRetry() } else { stopPermissionRetry() }
+        settingsWindow?.refreshPermissionStatus(listenerRunning: monitor.isRunning)
+    }
+
+    private func stopAccessibilityFeatures() {
+        if monitor.isRunning { monitor.stop() }
+        if mouseMonitorRunning {
+            mouseEventManager.stop()
+            mouseMonitorRunning = false
+        }
+        if dockPreviewsRunning {
+            dockPreviews.stop()
+            dockPreviewsRunning = false
+        }
+        if windowsBehaviorsRunning {
+            windowsBehaviors.stop()
+            windowsBehaviorsRunning = false
+        }
+        if windowStoreRunning {
+            store.stop()
+            windowStoreRunning = false
+        }
+    }
+
+    private func schedulePermissionRetry() {
+        guard permissionTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshFeatureLifecycles() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        permissionTimer = timer
+    }
+
+    private func stopPermissionRetry() {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
+    }
+
+    private func makeSettingsWindow() -> SystemSettingsWindowController {
+        if let settingsWindow { return settingsWindow }
+        let controller = SystemSettingsWindowController(
+            preferences: preferences,
+            store: store,
+            screenTools: screenTools,
+            mouseSettings: mouseSettings,
+            mouseEventManager: mouseEventManager,
+            initiallyEnabled: isSwitcherEnabled,
+            initiallySelectedShortcut: configuredShortcut,
+            initiallySelectedLayout: configuredLayout,
+            initiallyEnablesStayAwake: awakeFeatureEnabled,
+            initiallyShowsAwakeInWarpTabMenu: showsAwakeInWarpTabMenu,
+            initiallyShowsViewStyleInWarpTabMenu: showsViewStyleInWarpTabMenu,
+            initiallyShowsClipboardInWarpTabMenu: showsClipboardInWarpTabMenu,
+            initiallyShowsScreenTextInWarpTabMenu: showsScreenTextInWarpTabMenu,
+            initiallyShowsColorPickerInWarpTabMenu: showsColorPickerInWarpTabMenu,
+            initiallyShowsWarpTabStatusItem: showsWarpTabStatusItem,
+            initiallyShowsClipboardStatusItem: showsClipboardStatusItem,
+            initiallyShowsAwakeStatusItem: UserDefaults.standard.bool(forKey: "showAwakeStatusItem"),
+            initiallyShowsSoundStatusItem: showsSoundStatusItem,
+            onEnabledChange: { [weak self] enabled in self?.setSwitcherEnabled(enabled) },
+            onShortcutChange: { [weak self] shortcut in self?.setShortcut(shortcut) ?? false },
+            onLayoutChange: { [weak self] layout in self?.setLayout(layout) },
+            onStayAwakeEnabledChange: { [weak self] enabled in self?.setStayAwakeFeatureEnabled(enabled) },
+            onShowAwakeInWarpTabMenuChange: { [weak self] visible in self?.setAwakeMenuItemVisible(visible) },
+            onShowViewStyleInWarpTabMenuChange: { [weak self] visible in self?.setViewStyleMenuItemVisible(visible) },
+            onShowClipboardInWarpTabMenuChange: { [weak self] visible in self?.setClipboardMenuItemVisible(visible) },
+            onShowScreenTextInWarpTabMenuChange: { [weak self] visible in self?.setScreenTextMenuItemVisible(visible) },
+            onShowColorPickerInWarpTabMenuChange: { [weak self] visible in self?.setColorPickerMenuItemVisible(visible) },
+            onShowWarpTabStatusItemChange: { [weak self] visible in self?.setWarpTabStatusItemVisible(visible) },
+            onShowClipboardStatusItemChange: { [weak self] visible in self?.setClipboardStatusItemVisible(visible) },
+            onShowAwakeStatusItemChange: { [weak self] visible in self?.setAwakeStatusItemVisible(visible) },
+            onShowSoundStatusItemChange: { [weak self] visible in
+                Task { @MainActor in self?.setSoundStatusItemVisible(visible) }
+            },
+            onClearClipboard: { [weak self] in self?.windowsBehaviors.clearClipboard() },
+            onOpenAccessibility: { [weak self] in self?.openAccessibilitySettings() },
+            onClose: { [weak self] in self?.settingsDidClose() }
+        )
+        settingsWindow = controller
+        return controller
     }
 
     @objc private func openAccessibilitySettings() {
@@ -526,14 +761,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showSettings() {
         NSApplication.shared.setActivationPolicy(.regular)
+        let settingsWindow = makeSettingsWindow()
         settingsWindow.showWindow(nil)
-        ensureMonitorStarted()
+        refreshFeatureLifecycles()
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindow.window?.makeKeyAndOrderFront(nil)
     }
 
     private func showSoundSettings() {
         NSApplication.shared.setActivationPolicy(.regular)
+        let settingsWindow = makeSettingsWindow()
         settingsWindow.showSoundSettings()
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindow.window?.makeKeyAndOrderFront(nil)
@@ -541,16 +778,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     fileprivate func openSoundMixerFromSystemControl() {
-        if settingsWindow.window?.isVisible == true {
-            settingsWindow.close()
+        if settingsWindow?.window?.isVisible == true {
+            settingsWindow?.close()
         }
+
+        let controller = soundController(createIfNeeded: true)
 
         if dismissControlCenterIfOpen() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-                self?.soundStatusItemController?.showFromSystemControl()
+                self?.soundController(createIfNeeded: true)?.showFromSystemControl()
             }
         } else {
-            soundStatusItemController?.showFromSystemControl()
+            controller?.showFromSystemControl()
         }
     }
 
@@ -577,6 +816,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showClipboardHistory() {
         windowsBehaviors.showClipboardHistory()
+    }
+
+    @objc private func copyTextFromScreenFromMenu() {
+        screenTools.copyTextFromScreen()
+    }
+
+    @objc private func pickColorFromScreenFromMenu() {
+        screenTools.pickColorFromScreen()
     }
 
     private func settingsDidClose() {

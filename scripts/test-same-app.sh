@@ -26,6 +26,7 @@ cleanup() {
 trap cleanup EXIT
 
 defaults write com.warptab.app switcherEnabled -bool true
+defaults write com.warptab.app dockPreviewsEnabled -bool false
 defaults write com.warptab.app customShortcut '48,2048,Tab'
 defaults write com.warptab.app nativeTabBehavior individual
 defaults write com.warptab.app showWindowlessApps -bool false
@@ -38,6 +39,7 @@ swiftc \
   -framework ApplicationServices \
   -framework CoreGraphics \
   -framework Vision \
+  "$PROJECT_DIR/Sources/WarpTab/AXTypeSafety.swift" \
   "$PROJECT_DIR/Sources/WarpTab/WarpWindow.swift" \
   "$PROJECT_DIR/Sources/WarpTab/WindowActivator.swift" \
   "$PROJECT_DIR/Tests/IntegrationHarness/main.swift" \

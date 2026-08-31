@@ -18,6 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 defaults write com.warptab.app switcherEnabled -bool true
+defaults write com.warptab.app dockPreviewsEnabled -bool false
 defaults write com.warptab.app customShortcut '48,2048,Tab'
 defaults write com.warptab.app switcherLayout list
 defaults write com.warptab.app searchEnabled -bool true
@@ -45,9 +46,19 @@ for count in 5 20 50 100; do
   "$HARNESS" "$count"
   warp_pid=$(pgrep -x WarpTab | head -1)
   rss_kb=$(ps -o rss= -p "$warp_pid" | tr -d ' ')
-  if (( rss_kb > 512000 )); then
-    echo "WarpTab memory exceeded 500 MB at $count windows: ${rss_kb} KB" >&2
+  footprint_value=$(vmmap -summary "$warp_pid" 2>/dev/null | awk '/^Physical footprint:/ { print $3; exit }')
+  footprint_kb=$(awk -v value="$footprint_value" 'BEGIN {
+    suffix = substr(value, length(value), 1)
+    amount = value + 0
+    if (suffix == "G") amount *= 1024 * 1024
+    else if (suffix == "M") amount *= 1024
+    else if (suffix == "K") amount *= 1
+    else amount /= 1024
+    printf "%d", amount
+  }')
+  if (( footprint_kb > 393216 )); then
+    echo "WarpTab physical footprint exceeded 384 MB at $count windows: ${footprint_value}" >&2
     exit 1
   fi
-  echo "$count windows: WarpTab RSS ${rss_kb} KB"
+  echo "$count windows: WarpTab RSS ${rss_kb} KB, physical footprint ${footprint_value}"
 done

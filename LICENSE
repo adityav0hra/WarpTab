@@ -5,9 +5,14 @@ Copyright (c) 2026 adityav0hra. All rights reserved.
 1. Limited permission
 
 You may download and use unmodified official WarpTab releases on devices that
-you own or control for personal, non-commercial purposes. You may view the
-source code and make private modifications solely for your own personal,
-non-commercial use.
+you or your organization own or control, for personal or internal business
+purposes. You may install WarpTab for employees and contractors working solely
+on behalf of that same organization.
+
+You may view the source code and make private modifications solely for your own
+or your organization's internal use. Private modifications may not be provided
+to customers, affiliates, contractors acting for another organization, or any
+other third party without prior written permission from the copyright holder.
 
 2. Restrictions
 
@@ -17,8 +22,12 @@ Except with prior written permission from the copyright holder, you may not:
   transfer, or otherwise provide copies of WarpTab to another person;
 - publish or distribute modified versions, derivative works, source code,
   compiled binaries, or substantial portions of WarpTab;
-- use WarpTab or any derivative work for a commercial purpose; or
+- provide WarpTab, access to WarpTab, or services substantially consisting of
+  WarpTab's functionality to a third party for a fee; or
 - remove or alter copyright, license, attribution, or proprietary notices.
+
+Internal business use permitted by section 1 is not considered distribution,
+sublicensing, resale, or provision of WarpTab to a third party.
 
 No trademark rights or rights to the WarpTab name, icon, or branding are
 granted by this agreement.

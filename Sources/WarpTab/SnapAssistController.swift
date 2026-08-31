@@ -3,6 +3,7 @@ import AppKit
 final class SnapAssistController {
     private let panel: NSPanel
     private let previewCache: PreviewCache
+    private let preferences: WarpPreferences
     private let effect = NSVisualEffectView()
     private let heading = NSTextField(labelWithString: "Choose a window for this space")
     private let scrollView = NSScrollView()
@@ -12,8 +13,9 @@ final class SnapAssistController {
     private var selectionHandler: ((WarpWindow) -> Void)?
     private var dismissal: DispatchWorkItem?
 
-    init(previewCache: PreviewCache) {
+    init(previewCache: PreviewCache, preferences: WarpPreferences) {
         self.previewCache = previewCache
+        self.preferences = preferences
         panel = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -27,6 +29,7 @@ final class SnapAssistController {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.becomesKeyOnlyIfNeeded = true
+        panel.animationBehavior = preferences.animationsEnabled ? .utilityWindow : .none
 
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
@@ -61,6 +64,7 @@ final class SnapAssistController {
         layout: SnapAssistLayout,
         onChoose: @escaping (WarpWindow) -> Void
     ) {
+        panel.animationBehavior = preferences.animationsEnabled ? .utilityWindow : .none
         dismissal?.cancel()
         clearCandidates()
         selectionHandler = onChoose

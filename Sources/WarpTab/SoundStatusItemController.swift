@@ -11,13 +11,20 @@ final class SoundStatusItemController: NSObject {
     private var localOutsideClickMonitor: Any?
     private var previewWindow: NSWindow?
     private let onOpenSettings: () -> Void
+    private let onDismiss: () -> Void
 
-    init(showMenuBarItem: Bool = true, onOpenSettings: @escaping () -> Void) {
+    init(
+        showMenuBarItem: Bool = true,
+        animationsEnabled: Bool = false,
+        onOpenSettings: @escaping () -> Void,
+        onDismiss: @escaping () -> Void = {}
+    ) {
         self.onOpenSettings = onOpenSettings
+        self.onDismiss = onDismiss
         super.init()
 
         popover.behavior = .transient
-        popover.animates = true
+        popover.animates = animationsEnabled
         popover.delegate = self
         popover.contentSize = NSSize(width: 330, height: 158)
         popover.contentViewController = NSHostingController(
@@ -57,6 +64,10 @@ final class SoundStatusItemController: NSObject {
         }
     }
 
+    func setAnimationsEnabled(_ enabled: Bool) {
+        popover.animates = enabled
+    }
+
     func removeFromMenuBar() {
         popover.performClose(nil)
         if let statusItem {
@@ -70,7 +81,7 @@ final class SoundStatusItemController: NSObject {
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            soundManager.refresh()
+            soundManager.setInterfaceVisible(true)
             updatePopoverSize()
             NSApplication.shared.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -91,7 +102,7 @@ final class SoundStatusItemController: NSObject {
         }
 
         guard !popover.isShown else { return }
-        soundManager.refresh()
+        soundManager.setInterfaceVisible(true)
         updatePopoverSize()
 
         let mouseLocation = NSEvent.mouseLocation
@@ -128,7 +139,7 @@ final class SoundStatusItemController: NSObject {
 
     func showPopover(relativeTo anchorView: NSView) {
         guard !popover.isShown else { return }
-        soundManager.refresh()
+        soundManager.setInterfaceVisible(true)
         updatePopoverSize()
         NSApplication.shared.activate(ignoringOtherApps: true)
         popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
@@ -137,7 +148,7 @@ final class SoundStatusItemController: NSObject {
     }
 
     func showPreviewWindow() {
-        soundManager.refresh()
+        soundManager.setInterfaceVisible(true)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 330, height: 220),
             styleMask: [.titled, .closable, .fullSizeContentView],
@@ -201,8 +212,10 @@ final class SoundStatusItemController: NSObject {
 
 extension SoundStatusItemController: NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
+        soundManager.setInterfaceVisible(false)
         stopOutsideClickMonitoring()
         systemControlAnchorWindow?.orderOut(nil)
         systemControlAnchorWindow = nil
+        onDismiss()
     }
 }

@@ -6,7 +6,8 @@ Security fixes are provided for the current stable release and the latest beta r
 
 | Version | Supported |
 | --- | --- |
-| 2.0 beta | Yes |
+| 2.1.x | Yes |
+| 2.0.x | Yes |
 | 1.1.x | Yes |
 | 1.0.x | No |
 | Earlier versions | No |

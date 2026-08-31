@@ -4,6 +4,7 @@ import CoreGraphics
 
 final class WindowStore {
     var onChange: (() -> Void)?
+    var onDockPreviewChange: (() -> Void)?
     var onPreviewInvalidation: ((String) -> Void)?
 
     let preferences: WarpPreferences
@@ -18,13 +19,17 @@ final class WindowStore {
     private let refreshQueue = DispatchQueue(label: "com.warptab.window-store", qos: .userInitiated)
     private var workspaceObservers: [NSObjectProtocol] = []
     private var axObservers: [pid_t: AXObserver] = [:]
+    private var observedWindows: [pid_t: [Int: AXUIElement]] = [:]
+    private var observedTabs: [pid_t: [Int: AXUIElement]] = [:]
     private var safetyTimer: Timer?
     private var started = false
+    private var lifecycleGeneration: UInt64 = 0
 
     init(preferences: WarpPreferences) {
         self.preferences = preferences
         preferences.onChange = { [weak self] in
             self?.onChange?()
+            self?.onDockPreviewChange?()
             self?.requestRefresh()
         }
     }
@@ -36,8 +41,11 @@ final class WindowStore {
     func start() {
         guard !started else { return }
         started = true
+        lifecycleGeneration &+= 1
         installWorkspaceObservers()
         requestRefresh(immediate: true)
+        // Some applications do not reliably emit every AX notification, so
+        // retain a short recovery scan to keep minimized and Space state fresh.
         safetyTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
             self?.requestRefresh()
         }
@@ -54,12 +62,15 @@ final class WindowStore {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
         axObservers.removeAll()
+        observedWindows.removeAll()
+        observedTabs.removeAll()
         started = false
+        lifecycleGeneration &+= 1
     }
 
     func requestRefresh(immediate: Bool = false) {
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, started else { return }
             refreshWorkItem?.cancel()
             let item = DispatchWorkItem { [weak self] in self?.beginRefresh() }
             refreshWorkItem = item
@@ -134,8 +145,11 @@ final class WindowStore {
         if candidates.count == 1 { return candidates[0].identity }
 
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
-        AXUIElementSetMessagingTimeout(appElement, 0.15)
-        guard let focused = attribute(appElement, kAXFocusedWindowAttribute).map({ $0 as! AXUIElement }) else {
+        // Preserve exact first-window ordering without letting a busy
+        // application stall the shortcut for macOS's usual 100+ ms AX wait.
+        // The observer-fed focus bit below remains the fallback.
+        AXUIElementSetMessagingTimeout(appElement, 0.04)
+        guard let focused = warpAXElement(attribute(appElement, kAXFocusedWindowAttribute)) else {
             return candidates.first(where: \.isFocused)?.identity
         }
         var focusedCandidates = candidates.filter {
@@ -162,6 +176,7 @@ final class WindowStore {
     }
 
     private func beginRefresh() {
+        guard started else { return }
         stateLock.lock()
         if refreshInProgress {
             refreshRequested = true
@@ -174,6 +189,7 @@ final class WindowStore {
         let displays = DisplaySnapshot.current()
         let previous = allWindows()
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let generation = lifecycleGeneration
         refreshQueue.async { [weak self] in
             guard let self else { return }
             let result = self.discoverWindows(
@@ -182,13 +198,14 @@ final class WindowStore {
                 frontmostPID: frontmostPID
             )
             DispatchQueue.main.async {
-                self.apply(result)
                 self.stateLock.lock()
+                let shouldApply = self.started && self.lifecycleGeneration == generation
                 self.refreshInProgress = false
                 let runAgain = self.refreshRequested
                 self.refreshRequested = false
                 self.stateLock.unlock()
-                if runAgain { self.requestRefresh(immediate: true) }
+                if shouldApply { self.apply(result) }
+                if runAgain, self.started { self.requestRefresh(immediate: true) }
             }
         }
     }
@@ -226,6 +243,7 @@ final class WindowStore {
         stateLock.unlock()
         installAXObservers(for: enriched)
         onChange?()
+        onDockPreviewChange?()
     }
 
     private func mergeRetainedWindows(
@@ -285,8 +303,7 @@ final class WindowStore {
         for app in apps {
             let appElement = AXUIElementCreateApplication(app.processIdentifier)
             AXUIElementSetMessagingTimeout(appElement, 0.22)
-            let focusedElement: AXUIElement? = attribute(appElement, kAXFocusedWindowAttribute)
-                .map { $0 as! AXUIElement }
+            let focusedElement = warpAXElement(attribute(appElement, kAXFocusedWindowAttribute))
             let axWindows = (attribute(appElement, kAXWindowsAttribute) as? [AXUIElement]) ?? []
             var unusedCandidates = cgByPID[app.processIdentifier] ?? []
             var usableWindowCount = 0
@@ -429,6 +446,8 @@ final class WindowStore {
             guard let observer = axObservers[pid] else { continue }
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
             axObservers.removeValue(forKey: pid)
+            observedWindows.removeValue(forKey: pid)
+            observedTabs.removeValue(forKey: pid)
         }
 
         for pid in activePIDs where axObservers[pid] == nil {
@@ -441,7 +460,6 @@ final class WindowStore {
             for notification in [
                 kAXFocusedWindowChangedNotification,
                 kAXMainWindowChangedNotification,
-                kAXFocusedUIElementChangedNotification,
                 kAXWindowCreatedNotification
             ] {
                 AXObserverAddNotification(
@@ -462,10 +480,54 @@ final class WindowStore {
             kAXWindowMiniaturizedNotification,
             kAXWindowDeminiaturizedNotification
         ]
-        for window in windows {
-            guard let observer = axObservers[window.application.processIdentifier],
-                  let element = window.axWindow else { continue }
-            for notification in windowNotifications {
+        let windowsByPID = Dictionary(grouping: windows, by: { $0.application.processIdentifier })
+        for (pid, appWindows) in windowsByPID {
+            guard let observer = axObservers[pid] else { continue }
+
+            // A native tab group intentionally produces several WarpWindow
+            // entries backed by the same AX window. Deduplicate instead of
+            // using Dictionary(uniqueKeysWithValues:), which would trap.
+            var currentWindows: [Int: AXUIElement] = [:]
+            for window in appWindows {
+                if let element = window.axWindow {
+                    currentWindows[Int(CFHash(element))] = element
+                }
+            }
+            reconcileObservedElements(
+                observer: observer,
+                previous: &observedWindows[pid, default: [:]],
+                current: currentWindows,
+                notifications: windowNotifications
+            )
+
+            var currentTabs: [Int: AXUIElement] = [:]
+            for window in appWindows {
+                if let element = window.axTab {
+                    currentTabs[Int(CFHash(element))] = element
+                }
+            }
+            reconcileObservedElements(
+                observer: observer,
+                previous: &observedTabs[pid, default: [:]],
+                current: currentTabs,
+                notifications: [kAXValueChangedNotification]
+            )
+        }
+    }
+
+    private func reconcileObservedElements(
+        observer: AXObserver,
+        previous: inout [Int: AXUIElement],
+        current: [Int: AXUIElement],
+        notifications: [String]
+    ) {
+        for (identity, element) in previous where current[identity] == nil {
+            for notification in notifications {
+                AXObserverRemoveNotification(observer, element, notification as CFString)
+            }
+        }
+        for (identity, element) in current where previous[identity] == nil {
+            for notification in notifications {
                 AXObserverAddNotification(
                     observer,
                     element,
@@ -473,22 +535,14 @@ final class WindowStore {
                     Unmanaged.passUnretained(self).toOpaque()
                 )
             }
-            if let tab = window.axTab {
-                AXObserverAddNotification(
-                    observer,
-                    tab,
-                    kAXValueChangedNotification as CFString,
-                    Unmanaged.passUnretained(self).toOpaque()
-                )
-            }
         }
+        previous = current
     }
 
     fileprivate func handleAXEvent(element: AXUIElement, notification: String) {
         let identity = "\(pid(of: element)):ax:\(CFHash(element))"
         if notification == kAXFocusedWindowChangedNotification ||
             notification == kAXMainWindowChangedNotification ||
-            notification == kAXFocusedUIElementChangedNotification ||
             notification == kAXValueChangedNotification,
            let focusedIdentity = currentFocusedIdentity() {
             mru.observeFocused(focusedIdentity)
@@ -528,7 +582,7 @@ final class WindowStore {
 
         let candidates: [NativeTabCandidate] = tabs.compactMap { tab in
             guard attribute(tab, kAXSubroleAttribute) as? String == "AXTabButton",
-                  let tabWindow = attribute(tab, kAXWindowAttribute).map({ $0 as! AXUIElement }),
+                  let tabWindow = warpAXElement(attribute(tab, kAXWindowAttribute)),
                   CFEqual(tabWindow, window),
                   supportsAction(tab, kAXPressAction),
                   let title = (attribute(tab, kAXTitleAttribute) as? String)?
@@ -550,12 +604,10 @@ final class WindowStore {
     private func bounds(of element: AXUIElement) -> CGRect {
         var position = CGPoint.zero
         var size = CGSize.zero
-        if let rawValue = attribute(element, kAXPositionAttribute) {
-            let value = rawValue as! AXValue
+        if let value = warpAXValue(attribute(element, kAXPositionAttribute)) {
             AXValueGetValue(value, .cgPoint, &position)
         }
-        if let rawValue = attribute(element, kAXSizeAttribute) {
-            let value = rawValue as! AXValue
+        if let value = warpAXValue(attribute(element, kAXSizeAttribute)) {
             AXValueGetValue(value, .cgSize, &size)
         }
         return CGRect(origin: position, size: size)

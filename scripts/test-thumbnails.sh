@@ -19,9 +19,9 @@ cleanup() {
 trap cleanup EXIT
 
 defaults write com.warptab.app switcherEnabled -bool true
+defaults write com.warptab.app dockPreviewsEnabled -bool false
 defaults write com.warptab.app customShortcut '48,2048,Tab'
 defaults write com.warptab.app switcherLayout thumbnails
-defaults write com.warptab.app previewsEnabled -bool true
 defaults write com.warptab.app nativeTabBehavior individual
 
 fixture_app=$($PROJECT_DIR/scripts/build-window-fixture.sh)

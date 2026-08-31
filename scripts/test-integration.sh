@@ -27,6 +27,7 @@ cleanup() {
 trap cleanup EXIT
 
 defaults write com.warptab.app switcherEnabled -bool true
+defaults write com.warptab.app dockPreviewsEnabled -bool false
 defaults write com.warptab.app customShortcut '48,2048,Tab'
 defaults write com.warptab.app switcherLayout list
 defaults write com.warptab.app nativeTabBehavior individual
@@ -38,6 +39,17 @@ defaults write com.warptab.app showOtherSpaces -bool true
 defaults write com.warptab.app showWindowlessApps -bool false
 defaults write com.warptab.app displayScope allDisplays
 defaults delete com.warptab.app excludedBundleIdentifiers 2>/dev/null || true
+
+if [[ "${1:-}" == "--modifier-isolation-only" ]]; then
+  defaults write com.warptab.app customShortcut '17,2048,T'
+  defaults write com.warptab.app screenTextCaptureShortcut '17,6144,T'
+  defaults write com.warptab.app screenColorPickerShortcut '8,6144,C'
+fi
+if [[ "${1:-}" == "--modifier-isolation-color-only" ]]; then
+  defaults write com.warptab.app customShortcut '8,2048,C'
+  defaults write com.warptab.app screenTextCaptureShortcut '17,6144,T'
+  defaults write com.warptab.app screenColorPickerShortcut '8,6144,C'
+fi
 
 if [[ "${1:-}" == "--single-window-promotion-only" ]]; then
   regular_bundle_ids=("${(@f)$(osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.runningApplications.js.filter(a => Number(a.activationPolicy) === 0).map(a => ObjC.unwrap(a.bundleIdentifier)).filter(x => x).join("\n")')}")
@@ -63,8 +75,10 @@ swiftc \
   -target arm64-apple-macos13.0 \
   -framework AppKit \
   -framework ApplicationServices \
+  -framework Carbon \
   -framework CoreGraphics \
   -framework Vision \
+  "$PROJECT_DIR/Sources/WarpTab/AXTypeSafety.swift" \
   "$PROJECT_DIR/Sources/WarpTab/WarpWindow.swift" \
   "$PROJECT_DIR/Sources/WarpTab/WindowActivator.swift" \
   "$PROJECT_DIR/Tests/IntegrationHarness/main.swift" \

@@ -68,6 +68,28 @@ func find(_ title: String) -> AXUIElement? {
     }
 }
 
+func extraMenuBarElements() -> [AXUIElement] {
+    guard let extras = value(axApp, kAXExtrasMenuBarAttribute).map({ $0 as! AXUIElement }) else { return [] }
+    return descendants(of: extras)
+}
+
+func warpTabStatusItem() -> AXUIElement? {
+    extraMenuBarElements().first {
+        string($0, kAXDescriptionAttribute) == "WarpTab"
+    }
+}
+
+func hasScreenSelectionWindow() -> Bool {
+    let screenSizes = NSScreen.screens.map(\.frame.size)
+    let windows = value(axApp, kAXWindowsAttribute) as? [AXUIElement] ?? []
+    return windows.contains { window in
+        guard let candidate = size(value(window, kAXSizeAttribute)) else { return false }
+        return screenSizes.contains {
+            abs($0.width - candidate.width) < 3 && abs($0.height - candidate.height) < 3
+        }
+    }
+}
+
 func press(_ title: String) {
     guard let element = find(title) else {
         fputs("FAIL: missing control \(title)\n", stderr)
@@ -96,6 +118,17 @@ func frame(_ element: AXUIElement) -> CGRect? {
     guard let origin = point(value(element, kAXPositionAttribute)),
           let dimensions = size(value(element, kAXSizeAttribute)) else { return nil }
     return CGRect(origin: origin, size: dimensions)
+}
+
+func click(_ element: AXUIElement) -> Bool {
+    guard let target = frame(element) else { return false }
+    let point = CGPoint(x: target.midX, y: target.midY)
+    CGWarpMouseCursorPosition(point)
+    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+        CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+    }
+    return true
 }
 
 func pressSidebar(_ title: String) {
@@ -322,6 +355,7 @@ if CommandLine.arguments.contains("--dock-double-click-illustrations-only") {
 pressSidebar("Window Switcher")
 require(waitUntil(3) { find("Appearance") != nil }, "Appearance section is present")
 require(find("Show View Style in menu bar") != nil, "View Style menu visibility option is present")
+require(find("Animations") != nil, "global animation option is present")
 require(find("Enable Window Switcher") != nil, "enable control is accessible")
 require(find("Keyboard shortcut") != nil, "shortcut recorder is accessible")
 require(find("Same Application") != nil, "same-application shortcut row is present")
@@ -371,6 +405,23 @@ require(waitUntil(2) {
     UserDefaults(suiteName: "com.warptab.app")?.bool(forKey: "showViewStyleInWarpTabMenu") == false
 }, "View Style menu visibility option persists")
 
+press("Show WarpTab menu bar icon")
+require(waitUntil(2) {
+    UserDefaults(suiteName: "com.warptab.app")?.bool(forKey: "showWarpTabStatusItem") == false
+}, "WarpTab main menu-bar icon can be hidden")
+require(waitUntil(2) { warpTabStatusItem() == nil }, "WarpTab main menu-bar icon is actually removed")
+press("Show WarpTab menu bar icon")
+require(waitUntil(2) {
+    UserDefaults(suiteName: "com.warptab.app")?.bool(forKey: "showWarpTabStatusItem") == true
+}, "WarpTab main menu-bar icon can be restored")
+require(waitUntil(2) { warpTabStatusItem() != nil }, "WarpTab main menu-bar icon is actually restored")
+
+pressSidebar("Mouse")
+require(waitUntil(2) { find("Enable Mouse Features") != nil }, "Mouse features have a master enable option")
+
+pressSidebar("Sound Mixer")
+require(waitUntil(2) { find("Show Sound Mixer") != nil }, "Sound Mixer has a master enable option")
+
 pressSidebar("Dock")
 require(waitUntil(2) { find("Dock window previews") != nil }, "Dock page opens")
 for expected in [
@@ -398,6 +449,68 @@ for expected in [
     "Move / Snap Left", "Move / Snap Right", "Move / Snap Up", "Move / Snap Down"
 ] {
     require(find(expected) != nil, "\(expected) shortcut is shown")
+}
+
+pressSidebar("Screen Tools")
+require(waitUntil(2) { find("Copy Text from Screen") != nil && find("Pick Color from Screen") != nil },
+        "Screen Tools page opens")
+for expected in [
+    "Detect QR Codes", "Text recognition is performed locally on this Mac.",
+    "Copy Format", "Automatically Copy Result"
+] {
+    require(find(expected) != nil, "\(expected) Screen Tools control is present")
+}
+press("Show Copy Text in WarpTab menu")
+press("Show Color Picker in WarpTab menu")
+require(waitUntil(2) {
+    let defaults = UserDefaults(suiteName: "com.warptab.app")
+    return defaults?.bool(forKey: "showScreenTextInWarpTabMenu") == true &&
+        defaults?.bool(forKey: "showColorPickerInWarpTabMenu") == true
+}, "Screen Tools can be added to WarpTab’s menu-bar menu")
+if let statusItem = warpTabStatusItem() {
+    require(click(statusItem), "WarpTab menu opens")
+    require(waitUntil(2) {
+        let titles = extraMenuBarElements().compactMap { string($0, kAXTitleAttribute) }
+        return titles.contains("Copy Text from Screen") && titles.contains("Pick Color from Screen")
+    }, "WarpTab menu contains both Screen Tools actions")
+    if CGPreflightScreenCaptureAccess(),
+       let textItem = extraMenuBarElements().first(where: {
+           string($0, kAXTitleAttribute) == "Copy Text from Screen"
+       }) {
+        require(
+            AXUIElementPerformAction(textItem, kAXPressAction as CFString) == .success,
+            "Copy Text menu action is clickable"
+        )
+        require(waitUntil(2) { hasScreenSelectionWindow() }, "Copy Text menu action opens screen selection")
+        CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: true)?.post(tap: .cghidEventTap)
+        CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: false)?.post(tap: .cghidEventTap)
+        _ = waitUntil(1) { !hasScreenSelectionWindow() }
+
+        if let restoredStatusItem = warpTabStatusItem() {
+            require(click(restoredStatusItem), "WarpTab menu reopens for Color Picker")
+            guard let colorItem = extraMenuBarElements().first(where: {
+                string($0, kAXTitleAttribute) == "Pick Color from Screen"
+            }) else {
+                require(false, "Color Picker menu action is available")
+                exit(1)
+            }
+            require(
+                AXUIElementPerformAction(colorItem, kAXPressAction as CFString) == .success,
+                "Color Picker menu action is clickable"
+            )
+            require(waitUntil(2) { hasScreenSelectionWindow() }, "Color Picker menu action opens screen selection")
+            CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: true)?.post(tap: .cghidEventTap)
+            CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: false)?.post(tap: .cghidEventTap)
+            _ = waitUntil(1) { !hasScreenSelectionWindow() }
+        } else {
+            require(false, "WarpTab menu-bar icon remains available")
+        }
+    } else {
+        CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: true)?.post(tap: .cghidEventTap)
+        CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: false)?.post(tap: .cghidEventTap)
+    }
+} else {
+    require(false, "WarpTab menu-bar icon is available for menu inspection")
 }
 
 pressSidebar("Permissions")

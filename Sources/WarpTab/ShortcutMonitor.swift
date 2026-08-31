@@ -47,6 +47,16 @@ struct SwitcherShortcut: Equatable {
         return flags
     }
 
+    func matchesEventModifiers(_ flags: CGEventFlags, allowingReverseShift: Bool = true) -> Bool {
+        let relevantMask: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+        var actual = flags.intersection(relevantMask)
+        let expected = eventModifierFlag.intersection(relevantMask)
+        if allowingReverseShift, !expected.contains(.maskShift) {
+            actual.remove(.maskShift)
+        }
+        return actual == expected
+    }
+
     var storageValue: String { "\(keyCode),\(carbonModifiers),\(keyLabel)" }
 
     init(keyCode: UInt32, carbonModifiers: UInt32, keyLabel: String) {
@@ -250,12 +260,16 @@ final class ShortcutMonitor {
     }
 
     fileprivate func processCarbonHotKey(scope: SwitcherWindowScope) {
+        let invokedShortcut = scope == .allWindows ? shortcut : .sameApplicationShortcut
+        guard invokedShortcut.matchesEventModifiers(
+            CGEventSource.flagsState(.combinedSessionState)
+        ) else { return }
         // Return from Carbon dispatch before asking WindowServer for its
         // window list; doing that synchronously here creates a circular wait.
         if !isCycling {
             isCycling = true
             activeScope = scope
-            activeShortcut = scope == .allWindows ? shortcut : .sameApplicationShortcut
+            activeShortcut = invokedShortcut
             initialTabWasReleased = false
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -293,10 +307,10 @@ final class ShortcutMonitor {
 
         let invokedShortcut: (shortcut: SwitcherShortcut, scope: SwitcherWindowScope)?
         if keyCode == shortcut.keyCode,
-           event.flags.contains(shortcut.eventModifierFlag) {
+           shortcut.matchesEventModifiers(event.flags) {
             invokedShortcut = (shortcut, .allWindows)
         } else if keyCode == SwitcherShortcut.sameApplicationShortcut.keyCode,
-                  event.flags.contains(SwitcherShortcut.sameApplicationShortcut.eventModifierFlag) {
+                  SwitcherShortcut.sameApplicationShortcut.matchesEventModifiers(event.flags) {
             let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
             invokedShortcut = pid.map { (SwitcherShortcut.sameApplicationShortcut, .application($0)) }
         } else {

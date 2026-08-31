@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Vision
 
 enum Failure: Error, CustomStringConvertible {
     case assertion(String)
@@ -64,6 +65,16 @@ private func dockPreviewImage() -> CGImage? {
         [.boundsIgnoreFraming, .bestResolution]
     )
 }
+private func recognizedDockPreviewText() -> String {
+    guard let image = dockPreviewImage() else { return "" }
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = false
+    try? VNImageRequestHandler(cgImage: image).perform([request])
+    return (request.results ?? [])
+        .compactMap { $0.topCandidates(1).first?.string }
+        .joined(separator: "\n")
+}
 private func previewPixels(_ image: CGImage) -> [UInt8]? {
     let width = 64
     let height = 48
@@ -118,13 +129,13 @@ private func click(_ element: AXUIElement) -> Bool {
     }
     return true
 }
-private func movePointerToFixtureDockItem(_ dockRoot: AXUIElement) -> CGPoint? {
+private func movePointerToDockItem(_ dockRoot: AXUIElement, bundleIdentifier: String) -> CGPoint? {
     var center: CGPoint?
     for attempt in 0..<4 {
         guard let dockItem = descendants(dockRoot).first(where: { item in
             guard attribute(item, kAXSubroleAttribute) as? String == "AXApplicationDockItem",
                   let url = attribute(item, kAXURLAttribute) as? URL else { return false }
-            return Bundle(url: url)?.bundleIdentifier == "com.warptab.fixture"
+            return Bundle(url: url)?.bundleIdentifier == bundleIdentifier
         }), let origin = point(attribute(dockItem, kAXPositionAttribute)),
            let dimensions = size(attribute(dockItem, kAXSizeAttribute)) else { return nil }
         center = CGPoint(x: origin.x + dimensions.width / 2, y: origin.y + dimensions.height / 2)
@@ -163,6 +174,50 @@ private func movePointerToFixtureDockItem(_ dockRoot: AXUIElement) -> CGPoint? {
     return center
 }
 
+private func movePointerToFixtureDockItem(_ dockRoot: AXUIElement) -> CGPoint? {
+    movePointerToDockItem(dockRoot, bundleIdentifier: "com.warptab.fixture")
+}
+
+private func measureWarmDockHoverLatency(_ dockRoot: AXUIElement) throws -> TimeInterval {
+    let dockItems = descendants(dockRoot).filter {
+        attribute($0, kAXSubroleAttribute) as? String == "AXApplicationDockItem"
+    }
+    guard let fixtureItem = dockItems.first(where: { item in
+        guard let url = attribute(item, kAXURLAttribute) as? URL else { return false }
+        return Bundle(url: url)?.bundleIdentifier == "com.warptab.fixture"
+    }), let otherItem = dockItems.first(where: { item in
+        guard !CFEqual(item, fixtureItem),
+              let url = attribute(item, kAXURLAttribute) as? URL else { return false }
+        return Bundle(url: url)?.bundleIdentifier != "com.warptab.app"
+    }), let fixtureOrigin = point(attribute(fixtureItem, kAXPositionAttribute)),
+       let fixtureSize = size(attribute(fixtureItem, kAXSizeAttribute)),
+       let otherOrigin = point(attribute(otherItem, kAXPositionAttribute)),
+       let otherSize = size(attribute(otherItem, kAXSizeAttribute)) else {
+        throw Failure.assertion("Dock items are unavailable for latency measurement")
+    }
+
+    let otherCenter = CGPoint(x: otherOrigin.x + otherSize.width / 2, y: otherOrigin.y + otherSize.height / 2)
+    CGWarpMouseCursorPosition(otherCenter)
+    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: otherCenter, mouseButton: .left)?
+        .post(tap: .cghidEventTap)
+    _ = waitUntil(1) { !dockPreviewIsVisible() }
+
+    let fixtureCenter = CGPoint(
+        x: fixtureOrigin.x + fixtureSize.width / 2,
+        y: fixtureOrigin.y + fixtureSize.height / 2
+    )
+    let start = CFAbsoluteTimeGetCurrent()
+    CGWarpMouseCursorPosition(fixtureCenter)
+    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: fixtureCenter, mouseButton: .left)?
+        .post(tap: .cghidEventTap)
+    let deadline = start + 0.3
+    while CFAbsoluteTimeGetCurrent() < deadline {
+        if dockPreviewIsVisible() { return CFAbsoluteTimeGetCurrent() - start }
+        wait(0.005)
+    }
+    throw Failure.assertion("Dock preview did not reopen during latency measurement")
+}
+
 do {
     try expect(AXIsProcessTrusted(), "Accessibility permission is available")
     let originalPointer = CGEvent(source: nil)!.location
@@ -170,6 +225,106 @@ do {
 
     let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first!
     let dockRoot = AXUIElementCreateApplication(dock.processIdentifier)
+    if let argumentIndex = CommandLine.arguments.firstIndex(of: "--real-app-click"),
+       CommandLine.arguments.indices.contains(argumentIndex + 1) {
+        let bundleIdentifier = CommandLine.arguments[argumentIndex + 1]
+        guard let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
+            throw Failure.assertion("Requested real application is not running: \(bundleIdentifier)")
+        }
+        let applicationRoot = AXUIElementCreateApplication(application.processIdentifier)
+        AXUIElementSetMessagingTimeout(applicationRoot, 0.4)
+        guard let windows = attribute(applicationRoot, kAXWindowsAttribute) as? [AXUIElement], windows.count > 1 else {
+            throw Failure.assertion("Requested real application does not expose multiple windows")
+        }
+        let focusedBefore = attribute(applicationRoot, kAXFocusedWindowAttribute).map { $0 as! AXUIElement }
+        guard let target = windows.first(where: { candidate in
+                  focusedBefore.map { focused in !CFEqual(focused, candidate) } ?? true
+              }),
+              let targetTitle = attribute(target, kAXTitleAttribute) as? String,
+              !targetTitle.isEmpty else {
+            throw Failure.assertion("A non-focused real application window is unavailable")
+        }
+        let originalApplication = NSWorkspace.shared.frontmostApplication
+        let originalRoot = originalApplication.map { AXUIElementCreateApplication($0.processIdentifier) }
+        let originalWindow = originalRoot.flatMap { attribute($0, kAXFocusedWindowAttribute).map { $0 as! AXUIElement } }
+        defer {
+            if let originalApplication, !originalApplication.isTerminated {
+                originalApplication.activate(options: [.activateIgnoringOtherApps])
+                if let originalRoot, let originalWindow {
+                    AXUIElementSetAttributeValue(originalRoot, kAXMainWindowAttribute as CFString, originalWindow)
+                    AXUIElementSetAttributeValue(originalRoot, kAXFocusedWindowAttribute as CFString, originalWindow)
+                    AXUIElementPerformAction(originalWindow, kAXRaiseAction as CFString)
+                }
+            }
+        }
+
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?
+            .activate(options: [.activateIgnoringOtherApps])
+        try expect(waitUntil(2) {
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder"
+        }, "Finder is frontmost before the real multi-window Dock click")
+        guard let dockCenter = movePointerToDockItem(dockRoot, bundleIdentifier: bundleIdentifier) else {
+            throw Failure.assertion("Requested application's Dock item is unavailable")
+        }
+        try expect(waitUntil(2) { dockPreviewIsVisible() }, "Real application's Dock previews open")
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: dockCenter, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+        }
+        wait(0.25)
+        try expect(dockPreviewIsVisible(), "Clicking the multi-window Dock app keeps its chooser open")
+        let frontmostAfterDockClick = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if frontmostAfterDockClick != "com.apple.finder" {
+            print("Real Dock chooser diagnostic: frontmost=\(frontmostAfterDockClick ?? "nil")")
+        }
+        try expect(frontmostAfterDockClick == "com.apple.finder",
+                   "Clicking the multi-window Dock app does not activate every window")
+
+        let warpTab = NSRunningApplication.runningApplications(withBundleIdentifier: "com.warptab.app").first!
+        let warpTabRoot = AXUIElementCreateApplication(warpTab.processIdentifier)
+        var targetCard: AXUIElement?
+        try expect(waitUntil(2) {
+            guard let previewWindow = (attribute(warpTabRoot, kAXWindowsAttribute) as? [AXUIElement])?.first(where: {
+                attribute($0, kAXTitleAttribute) as? String == "Dock Window Previews"
+            }) else { return false }
+            targetCard = descendants(previewWindow).first {
+                attribute($0, kAXRoleAttribute) as? String == kAXButtonRole &&
+                    label($0) == "Open \(targetTitle)"
+            }
+            return targetCard != nil
+        }, "Real application's target preview is available")
+        guard let targetCard else { throw Failure.assertion("Real application's target card is unavailable") }
+        guard let targetOrigin = point(attribute(targetCard, kAXPositionAttribute)),
+              let targetSize = size(attribute(targetCard, kAXSizeAttribute)) else {
+            throw Failure.assertion("Real application's target preview has no clickable frame")
+        }
+        let targetCenter = CGPoint(
+            x: targetOrigin.x + targetSize.width / 2,
+            y: targetOrigin.y + targetSize.height / 2
+        )
+        CGWarpMouseCursorPosition(targetCenter)
+        CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: targetCenter, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        wait(0.35)
+        try expect(dockPreviewIsVisible(), "A held real preview press waits for release")
+        CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: targetCenter, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        let realWindowFocused = waitUntil(3) {
+            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleIdentifier,
+                  let focused = attribute(applicationRoot, kAXFocusedWindowAttribute).map({ $0 as! AXUIElement }) else {
+                return false
+            }
+            return CFEqual(focused, target) ||
+                (attribute(focused, kAXTitleAttribute) as? String) == targetTitle
+        }
+        if !realWindowFocused {
+            let focused = attribute(applicationRoot, kAXFocusedWindowAttribute).map { $0 as! AXUIElement }
+            print("Real preview activation diagnostic: panelVisible=\(dockPreviewIsVisible()) frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil") target=\(String(reflecting: targetTitle)) focused=\(String(reflecting: focused.flatMap { attribute($0, kAXTitleAttribute) as? String }))")
+        }
+        try expect(realWindowFocused, "Real application's selected window opens and receives focus")
+        print("WarpTab real-application Dock preview test passed: \(assertions) assertions (\(targetTitle))")
+        exit(0)
+    }
     guard descendants(dockRoot).contains(where: { item in
         guard attribute(item, kAXSubroleAttribute) as? String == "AXApplicationDockItem",
               let url = attribute(item, kAXURLAttribute) as? URL else { return false }
@@ -192,8 +347,7 @@ do {
         fixtureApplication.hide()
         wait(1.4)
     }
-
-    guard movePointerToFixtureDockItem(dockRoot) != nil else {
+    guard let hoveredDockPoint = movePointerToFixtureDockItem(dockRoot) else {
         throw Failure.assertion("Fixture Dock item cannot be hovered")
     }
     if CommandLine.arguments.contains("--expect-hidden") ||
@@ -206,7 +360,29 @@ do {
         print("WarpTab hidden Dock preview test passed: \(assertions) assertions")
         exit(0)
     }
-    try expect(waitUntil(2) { dockPreviewIsVisible() }, "Dock hover opens window previews")
+    let didOpenPreview = waitUntil(2) { dockPreviewIsVisible() }
+    if !didOpenPreview {
+        let eventPoint = CGEvent(source: nil)?.location ?? .zero
+        print("Dock diagnostic: target=\(hoveredDockPoint) event=\(eventPoint) appKit=\(NSEvent.mouseLocation)")
+        print("Dock diagnostic screens: \(NSScreen.screens.map { $0.frame.debugDescription })")
+    }
+    try expect(didOpenPreview, "Dock hover opens window previews")
+    if CommandLine.arguments.contains("--expect-latency") {
+        let latency = try measureWarmDockHoverLatency(dockRoot)
+        try expect(latency < 0.12, "Warm Dock hover opens previews in under 120 ms")
+        print(String(format: "WarpTab Dock hover latency: %.0f ms", latency * 1_000))
+        if CommandLine.arguments.contains("--hold-open") {
+            wait(5)
+        }
+        exit(0)
+    }
+    if CommandLine.arguments.contains("--expect-empty") {
+        let text = recognizedDockPreviewText()
+        try expect(text.localizedCaseInsensitiveContains("No window open"),
+                   "Apps without windows show the No window open preview")
+        print("WarpTab empty Dock preview test passed: \(assertions) assertions")
+        exit(0)
+    }
     if CommandLine.arguments.contains("--expect-double-click-minimize-all") ||
         CommandLine.arguments.contains("--expect-double-click-minimize-top") ||
         CommandLine.arguments.contains("--expect-double-click-preserved") {
@@ -309,13 +485,18 @@ do {
         }, "The exact Beta preview is available")
         guard let beta else { throw Failure.assertion("Beta preview is unavailable") }
         try expect(click(beta), "A preview can be selected after intercepting the Dock click")
-        try expect(waitUntil(2) {
+        let selectedOnlyBeta = waitUntil(2) {
             guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.warptab.fixture",
                   let focused = attribute(fixtureRoot, kAXFocusedWindowAttribute).map({ $0 as! AXUIElement }) else {
                 return false
             }
             return attribute(focused, kAXTitleAttribute) as? String == "WarpTab Test — Beta"
-        }, "Only the selected window is activated")
+        }
+        if !selectedOnlyBeta {
+            let focused = attribute(fixtureRoot, kAXFocusedWindowAttribute).map({ $0 as! AXUIElement })
+            print("Dock chooser diagnostic: frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil") focused=\(focused.flatMap { attribute($0, kAXTitleAttribute) as? String } ?? "nil") previewVisible=\(dockPreviewIsVisible())")
+        }
+        try expect(selectedOnlyBeta, "Only the selected window is activated")
         print("WarpTab multi-window Dock chooser test passed: \(assertions) assertions")
         exit(0)
     }
@@ -337,27 +518,57 @@ do {
         exit(0)
     }
     if CommandLine.arguments.contains("--expect-live-refresh") {
-        wait(2.0)
-        guard let baselineImage = dockPreviewImage(),
-              let baseline = previewPixels(baselineImage) else {
-            throw Failure.assertion("Initial live preview image is unavailable")
-        }
+        var baseline: [UInt8]?
+        try expect(waitUntil(1.0) {
+            guard let baselineImage = dockPreviewImage() else { return false }
+            baseline = previewPixels(baselineImage)
+            return baseline != nil
+        }, "Initial live Dock preview image is available")
+        guard let baseline else { throw Failure.assertion("Initial live preview pixels are unavailable") }
+        let refreshStarted = Date()
         DistributedNotificationCenter.default().postNotificationName(
             Notification.Name("com.warptab.fixture.update-preview"),
             object: nil,
             userInfo: nil,
             deliverImmediately: true
         )
-        try expect(waitUntil(5) {
+        try expect(waitUntil(0.5) {
             guard let updatedImage = dockPreviewImage(),
                   let updated = previewPixels(updatedImage) else { return false }
             return averagePixelDifference(baseline, updated) > 5
         }, "Visible Dock thumbnails refresh when window contents change")
+        let refreshLatency = Date().timeIntervalSince(refreshStarted)
+        try expect(refreshLatency < 0.5,
+                   "Visible Dock thumbnail refresh completes in under 500 ms")
+        print(String(format: "WarpTab visible Dock refresh latency: %.0f ms", refreshLatency * 1_000))
         print("WarpTab live Dock preview refresh test passed: \(assertions) assertions")
         exit(0)
     }
     if CommandLine.arguments.contains("--expect-special-visible") {
         try expect(dockPreviewIsVisible(), "Configured special-state windows remain available in Dock previews")
+        let warpTab = NSRunningApplication.runningApplications(withBundleIdentifier: "com.warptab.app").first!
+        let warpTabRoot = AXUIElementCreateApplication(warpTab.processIdentifier)
+        var beta: AXUIElement?
+        try expect(waitUntil(2) {
+            guard let previewWindow = (attribute(warpTabRoot, kAXWindowsAttribute) as? [AXUIElement])?.first(where: {
+                attribute($0, kAXTitleAttribute) as? String == "Dock Window Previews"
+            }) else { return false }
+            beta = descendants(previewWindow).first {
+                attribute($0, kAXRoleAttribute) as? String == kAXButtonRole &&
+                    label($0).contains("Open WarpTab Test — Beta")
+            }
+            return beta != nil
+        }, "A special-state window preview can be selected")
+        guard let beta else { throw Failure.assertion("Special-state Beta preview is unavailable") }
+        try expect(click(beta), "A special-state preview accepts a click")
+        try expect(waitUntil(3) {
+            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.warptab.fixture",
+                  let focused = attribute(fixtureApplicationElement, kAXFocusedWindowAttribute).map({ $0 as! AXUIElement }) else {
+                return false
+            }
+            return attribute(focused, kAXTitleAttribute) as? String == "WarpTab Test — Beta" &&
+                (attribute(focused, kAXMinimizedAttribute) as? NSNumber)?.boolValue != true
+        }, "Clicking opens and focuses the exact special-state window")
         print("WarpTab special-state Dock preview test passed: \(assertions) assertions")
         exit(0)
     }
@@ -459,9 +670,21 @@ do {
             print("WarpTab last-window keep-open test passed: \(assertions) assertions")
             exit(0)
         }
-        try expect(waitUntil(3) {
+        let fixtureQuit = waitUntil(3) {
             NSRunningApplication.runningApplications(withBundleIdentifier: "com.warptab.fixture").isEmpty
-        }, "Closing the final window quits the app when enabled")
+        }
+        if !fixtureQuit,
+           let remaining = NSRunningApplication.runningApplications(withBundleIdentifier: "com.warptab.fixture").first {
+            let remainingRoot = AXUIElementCreateApplication(remaining.processIdentifier)
+            let axTitles = (attribute(remainingRoot, kAXWindowsAttribute) as? [AXUIElement] ?? [])
+                .map { label($0) }
+            let cgTitles = (CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] ?? [])
+                .filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == remaining.processIdentifier }
+                .compactMap { $0[kCGWindowName as String] as? String }
+            print("Last-window quit diagnostic: AX=\(axTitles) CG=\(cgTitles)")
+        }
+        try expect(fixtureQuit, "Closing the final window quits the app when enabled")
         print("WarpTab last-window quit test passed: \(assertions) assertions")
         exit(0)
     }
@@ -522,15 +745,22 @@ do {
     let betaCenter = CGPoint(x: betaOrigin.x + betaSize.width / 2, y: betaOrigin.y + betaSize.height / 2)
     CGWarpMouseCursorPosition(betaCenter)
     wait(0.08)
-    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-        CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: betaCenter, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
-    }
-    try expect(waitUntil(2) {
+    CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: betaCenter, mouseButton: .left)?
+        .post(tap: .cghidEventTap)
+    wait(0.35)
+    try expect(dockPreviewIsVisible(), "Holding a real mouse or trackpad press does not activate too early")
+    CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: betaCenter, mouseButton: .left)?
+        .post(tap: .cghidEventTap)
+    let focusedExactWindow = waitUntil(2) {
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.warptab.fixture",
               let focused = attribute(fixtureRoot, kAXFocusedWindowAttribute).map({ $0 as! AXUIElement }) else { return false }
         return attribute(focused, kAXTitleAttribute) as? String == "WarpTab Test — Beta"
-    }, "Clicking a preview focuses the exact window")
+    }
+    if !focusedExactWindow {
+        let focused = attribute(fixtureRoot, kAXFocusedWindowAttribute).map({ $0 as! AXUIElement })
+        print("Dock activation diagnostic: frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil") focused=\(focused.flatMap { attribute($0, kAXTitleAttribute) as? String } ?? "nil")")
+    }
+    try expect(focusedExactWindow, "Clicking a preview focuses the exact window")
     try expect(waitUntil(1) { !dockPreviewIsVisible() }, "Clicking closes the Dock preview panel")
     if CommandLine.arguments.contains("--test-dock-click") {
         guard let dockCenter = movePointerToFixtureDockItem(dockRoot) else {

@@ -76,10 +76,10 @@ final class DockPreviewController: NSWindowController {
     private var timer: Timer?
     private var mouseEventTap: CFMachPort?
     private var mouseEventRunLoopSource: CFRunLoopSource?
+    private var lastMouseEventTapInstallAttempt = Date.distantPast
     private var workspaceObservers: [NSObjectProtocol] = []
     private var dockList: AXUIElement?
     private var candidateBundleIdentifier: String?
-    private var candidateSince = Date.distantPast
     private var currentBundleIdentifier: String?
     private var currentDockFrame = CGRect.zero
     private var visibleWindowSignatures: [String] = []
@@ -89,7 +89,10 @@ final class DockPreviewController: NSWindowController {
     private var stackHeightConstraint: NSLayoutConstraint!
     private var suppressedBundleIdentifier: String?
     private var pendingMinimizeBundleIdentifier: String?
+    private var pendingMinimizeDockFrame: CGRect?
     private var interceptedMultiWindowBundleIdentifier: String?
+    private var interceptedPanelButton: DockPressButton?
+    private var interceptedPanelButtonFrame: CGRect?
 
     init(store: WindowStore, preferences: WarpPreferences, previewCache: PreviewCache) {
         self.store = store
@@ -103,35 +106,24 @@ final class DockPreviewController: NSWindowController {
         )
         super.init(window: panel)
         configurePanel(panel)
+        store.onDockPreviewChange = { [weak self] in
+            self?.handleStoreChange()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
 
     func start() {
         guard timer == nil else { return }
-        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+        previewCache.prepare()
+        // Keep hover presentation inside a single display frame without doing
+        // Dock Accessibility work while this optional feature is disabled.
+        let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
             self?.trackPointer()
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        let mouseMask = [
-            CGEventType.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown
-        ].reduce(CGEventMask(0)) {
-            $0 | (CGEventMask(1) << $1.rawValue)
-        }
-        mouseEventTap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mouseMask,
-            callback: warpTabDockMouseEventCallback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        )
-        if let mouseEventTap {
-            mouseEventRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, mouseEventTap, 0)
-            CFRunLoopAddSource(CFRunLoopGetMain(), mouseEventRunLoopSource, .commonModes)
-            CGEvent.tapEnable(tap: mouseEventTap, enable: true)
-        }
+        ensureMouseEventTap()
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         workspaceObservers = [
             workspaceCenter.addObserver(
@@ -145,6 +137,10 @@ final class DockPreviewController: NSWindowController {
                 queue: .main
             ) { [weak self] _ in self?.resetDockAccessibilityState() }
         ]
+    }
+
+    func updateAnimationsEnabled(_ enabled: Bool) {
+        window?.animationBehavior = enabled ? .utilityWindow : .none
     }
 
     func stop() {
@@ -167,7 +163,10 @@ final class DockPreviewController: NSWindowController {
 
     private func configurePanel(_ panel: NSPanel) {
         panel.title = "Dock Window Previews"
-        panel.level = .popUpMenu
+        // Dock previews must remain clickable above notifications and the
+        // full-screen Space chrome, while the nonactivating style preserves
+        // focus in the user's current application.
+        panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -176,7 +175,7 @@ final class DockPreviewController: NSWindowController {
         panel.isMovable = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.ignoresMouseEvents = false
-        panel.animationBehavior = .utilityWindow
+        panel.animationBehavior = preferences.animationsEnabled ? .utilityWindow : .none
         panel.setAccessibilityLabel("Dock window previews")
 
         let effect = NSVisualEffectView()
@@ -214,6 +213,7 @@ final class DockPreviewController: NSWindowController {
     }
 
     private func trackPointer() {
+        ensureMouseEventTap()
         guard preferences.dockPreviewsEnabled, AXIsProcessTrusted() else {
             hidePanel()
             return
@@ -229,11 +229,36 @@ final class DockPreviewController: NSWindowController {
         guard isNearDisplayEdge(appKitPoint) else {
             candidateBundleIdentifier = nil
             suppressedBundleIdentifier = nil
-            if Date().timeIntervalSince(lastRelevantMouseDate) > 0.28 { hidePanel() }
+            if Date().timeIntervalSince(lastRelevantMouseDate) > 0.28,
+               window?.isVisible == true || currentBundleIdentifier != nil {
+                hidePanel()
+            }
             return
         }
 
-        let quartzPoint = CGEvent(source: nil)?.location ?? .zero
+        let mainTop = NSScreen.warpHardwareMain?.frame.maxY ?? 0
+        let quartzPoint = CGPoint(x: appKitPoint.x, y: mainTop - appKitPoint.y)
+
+        // In a full-screen Space the Dock may retract as soon as our auxiliary
+        // panel appears. Its AX item can then disappear for a few frames even
+        // though the pointer has not left the icon. Preserve the known hit so
+        // the preview remains stable instead of flickering or closing.
+        if let bundleIdentifier = currentBundleIdentifier ?? candidateBundleIdentifier,
+           currentDockFrame.insetBy(dx: -4, dy: -4).contains(appKitPoint) {
+            if suppressedBundleIdentifier == bundleIdentifier {
+                hidePanel(clearCandidate: false)
+                return
+            }
+            candidateBundleIdentifier = bundleIdentifier
+            lastRelevantMouseDate = Date()
+            if window?.isVisible == true {
+                refreshVisiblePanelIfNeeded()
+            } else {
+                showPanel(for: bundleIdentifier, dockFrame: currentDockFrame)
+            }
+            return
+        }
+
         if let hit = dockHit(at: quartzPoint) {
             if suppressedBundleIdentifier == hit.bundleIdentifier {
                 hidePanel(clearCandidate: false)
@@ -245,17 +270,14 @@ final class DockPreviewController: NSWindowController {
             currentDockFrame = hit.appKitFrame
             if candidateBundleIdentifier != hit.bundleIdentifier {
                 candidateBundleIdentifier = hit.bundleIdentifier
-                candidateSince = Date()
                 store.requestRefresh(immediate: true)
                 if currentBundleIdentifier != hit.bundleIdentifier { hidePanel(clearCandidate: false) }
             }
-            if Date().timeIntervalSince(candidateSince) >= 0.4 {
-                if currentBundleIdentifier == hit.bundleIdentifier, window?.isVisible == true {
-                    if previousDockFrame != hit.appKitFrame { repositionPanel(for: hit.appKitFrame) }
-                    refreshVisiblePanelIfNeeded()
-                } else {
-                    showPanel(for: hit.bundleIdentifier, dockFrame: hit.appKitFrame)
-                }
+            if currentBundleIdentifier == hit.bundleIdentifier, window?.isVisible == true {
+                if previousDockFrame != hit.appKitFrame { repositionPanel(for: hit.appKitFrame) }
+                refreshVisiblePanelIfNeeded()
+            } else {
+                showPanel(for: hit.bundleIdentifier, dockFrame: hit.appKitFrame)
             }
             return
         }
@@ -265,6 +287,36 @@ final class DockPreviewController: NSWindowController {
         if Date().timeIntervalSince(lastRelevantMouseDate) > 0.28 {
             hidePanel()
         }
+    }
+
+    private func ensureMouseEventTap() {
+        if let mouseEventTap {
+            if !CGEvent.tapIsEnabled(tap: mouseEventTap) {
+                CGEvent.tapEnable(tap: mouseEventTap, enable: true)
+            }
+            return
+        }
+        guard Date().timeIntervalSince(lastMouseEventTapInstallAttempt) >= 1 else { return }
+        lastMouseEventTapInstallAttempt = Date()
+        let mouseMask = [
+            CGEventType.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown
+        ].reduce(CGEventMask(0)) {
+            $0 | (CGEventMask(1) << $1.rawValue)
+        }
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mouseMask,
+            callback: warpTabDockMouseEventCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else { return }
+        mouseEventTap = tap
+        mouseEventRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        if let mouseEventRunLoopSource {
+            CFRunLoopAddSource(CFRunLoopGetMain(), mouseEventRunLoopSource, .commonModes)
+        }
+        CGEvent.tapEnable(tap: tap, enable: true)
     }
 
     fileprivate func handleMouseEvent(_ eventType: CGEventType, event: CGEvent) -> Bool {
@@ -277,23 +329,68 @@ final class DockPreviewController: NSWindowController {
         let mainTop = NSScreen.warpHardwareMain?.frame.maxY ?? 0
         let appKitPoint = CGPoint(x: quartzPoint.x, y: mainTop - quartzPoint.y)
 
+        if eventType == .leftMouseUp, let pressedButton = interceptedPanelButton {
+            let pressedFrame = interceptedPanelButtonFrame
+            interceptedPanelButton = nil
+            interceptedPanelButtonFrame = nil
+            // Complete preview actions on mouse-up, like a native button. In
+            // particular, do not try to activate another Space/application
+            // while the physical Dock click is still held down; macOS can
+            // silently reject that activation for real trackpad/mouse input.
+            // Retain the original button through the whole gesture. An AX
+            // refresh may otherwise rebuild the card hierarchy between down
+            // and up and silently discard the user's chosen window.
+            if pressedFrame?.contains(appKitPoint) == true {
+                DispatchQueue.main.async { pressedButton.performPress() }
+            }
+            return true
+        }
+
+        // Dock Accessibility can report the icon below a point that is visibly
+        // inside our panel. Resolve preview controls before any Dock action;
+        // consuming the pair also avoids AppKit losing a release when this
+        // nonactivating panel is above a background application.
+        if window?.isVisible == true,
+           window?.frame.contains(appKitPoint) == true {
+            if eventType == .leftMouseDown,
+               let button = panelButton(at: appKitPoint) {
+                interceptedPanelButton = button
+                interceptedPanelButtonFrame = buttonFrameOnScreen(button)
+                return true
+            }
+            return false
+        }
+
         if eventType == .leftMouseUp {
             if interceptedMultiWindowBundleIdentifier != nil {
                 interceptedMultiWindowBundleIdentifier = nil
                 return true
             }
-            defer { pendingMinimizeBundleIdentifier = nil }
+            defer {
+                pendingMinimizeBundleIdentifier = nil
+                pendingMinimizeDockFrame = nil
+            }
+            let consumedMouseDown = pendingMinimizeBundleIdentifier != nil
             guard let pendingBundleIdentifier = pendingMinimizeBundleIdentifier,
-                  let hit = dockHit(at: quartzPoint),
-                  hit.bundleIdentifier == pendingBundleIdentifier else { return false }
+                  let pendingDockFrame = pendingMinimizeDockFrame,
+                  pendingDockFrame.insetBy(dx: -3, dy: -3).contains(appKitPoint) else {
+                return consumedMouseDown
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
                 self?.minimizeFrontmostWindow(bundleIdentifier: pendingBundleIdentifier)
             }
-            return false
+            return true
         }
 
-        guard let hit = dockHit(at: quartzPoint), hit.appKitFrame.contains(appKitPoint) else {
+        let cachedHit = candidateBundleIdentifier.flatMap { bundleIdentifier in
+            currentDockFrame.insetBy(dx: -3, dy: -3).contains(appKitPoint)
+                ? DockHit(bundleIdentifier: bundleIdentifier, appKitFrame: currentDockFrame)
+                : nil
+        }
+        guard let hit = cachedHit ?? dockHit(at: quartzPoint),
+              hit.appKitFrame.insetBy(dx: -3, dy: -3).contains(appKitPoint) else {
             pendingMinimizeBundleIdentifier = nil
+            pendingMinimizeDockFrame = nil
             interceptedMultiWindowBundleIdentifier = nil
             return false
         }
@@ -307,10 +404,14 @@ final class DockPreviewController: NSWindowController {
             }
             if windows.count > 1 {
                 pendingMinimizeBundleIdentifier = nil
+                pendingMinimizeDockFrame = nil
                 interceptedMultiWindowBundleIdentifier = hit.bundleIdentifier
                 suppressedBundleIdentifier = hit.bundleIdentifier
                 hidePanel()
-                minimizeWindowsForDoubleClick(bundleIdentifier: hit.bundleIdentifier)
+                let bundleIdentifier = hit.bundleIdentifier
+                DispatchQueue.main.async { [weak self] in
+                    self?.minimizeWindowsForDoubleClick(bundleIdentifier: bundleIdentifier)
+                }
                 return true
             }
         }
@@ -319,15 +420,23 @@ final class DockPreviewController: NSWindowController {
            preferences.dockPreviewsEnabled,
            preferences.chooseWindowOnMultiWindowDockClick {
             let windows = store.dockPreviewWindows(bundleIdentifier: hit.bundleIdentifier)
-            if windows.count > 1 {
+            let visibleChooserHasMultipleWindows = currentBundleIdentifier == hit.bundleIdentifier &&
+                window?.isVisible == true && visibleWindowSignatures.count > 1
+            if windows.count > 1 || visibleChooserHasMultipleWindows {
                 pendingMinimizeBundleIdentifier = nil
+                pendingMinimizeDockFrame = nil
                 interceptedMultiWindowBundleIdentifier = hit.bundleIdentifier
                 suppressedBundleIdentifier = nil
                 candidateBundleIdentifier = hit.bundleIdentifier
-                candidateSince = Date()
                 currentDockFrame = hit.appKitFrame
                 lastRelevantMouseDate = Date()
-                showPanel(for: hit.bundleIdentifier, dockFrame: hit.appKitFrame)
+                let bundleIdentifier = hit.bundleIdentifier
+                let dockFrame = hit.appKitFrame
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          interceptedMultiWindowBundleIdentifier == bundleIdentifier else { return }
+                    showPanel(for: bundleIdentifier, dockFrame: dockFrame)
+                }
                 return true
             }
         }
@@ -341,10 +450,12 @@ final class DockPreviewController: NSWindowController {
               preferences.minimizeFrontmostWindowOnDockClick,
               NSWorkspace.shared.frontmostApplication?.bundleIdentifier == hit.bundleIdentifier else {
             pendingMinimizeBundleIdentifier = nil
+            pendingMinimizeDockFrame = nil
             return false
         }
         pendingMinimizeBundleIdentifier = hit.bundleIdentifier
-        return false
+        pendingMinimizeDockFrame = hit.appKitFrame
+        return true
     }
 
     private func minimizeFrontmostWindow(bundleIdentifier: String) {
@@ -352,12 +463,13 @@ final class DockPreviewController: NSWindowController {
               let application = NSWorkspace.shared.frontmostApplication,
               application.bundleIdentifier == bundleIdentifier else { return }
         let candidates = store.allWindows().filter {
-            $0.bundleIdentifier == bundleIdentifier && !$0.isMinimized && !$0.isWindowlessApplication
+            $0.application.processIdentifier == application.processIdentifier &&
+                !$0.isMinimized && !$0.isWindowlessApplication
         }
         guard !candidates.isEmpty else { return }
 
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
-        let focusedElement = attribute(applicationElement, kAXFocusedWindowAttribute).map { $0 as! AXUIElement }
+        let focusedElement = warpAXElement(attribute(applicationElement, kAXFocusedWindowAttribute))
         let target = focusedElement.flatMap { focused in
             candidates.first { candidate in
                 candidate.axWindow.map { CFEqual($0, focused) } ?? false
@@ -389,7 +501,7 @@ final class DockPreviewController: NSWindowController {
     private func topWindow(in candidates: [WarpWindow]) -> WarpWindow? {
         guard let application = candidates.first?.application else { return nil }
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
-        let focusedElement = attribute(applicationElement, kAXFocusedWindowAttribute).map { $0 as! AXUIElement }
+        let focusedElement = warpAXElement(attribute(applicationElement, kAXFocusedWindowAttribute))
         return focusedElement.flatMap { focused in
             candidates.first { candidate in
                 candidate.axWindow.map { CFEqual($0, focused) } ?? false
@@ -407,31 +519,67 @@ final class DockPreviewController: NSWindowController {
         hidePanel()
     }
 
-    private func refreshVisiblePanelIfNeeded() {
+    private func handleStoreChange() {
+        guard currentBundleIdentifier != nil, window?.isVisible == true else { return }
+        refreshVisiblePanelIfNeeded(forceRefresh: true)
+    }
+
+    private func refreshVisiblePanelIfNeeded(forceRefresh: Bool = false) {
+        // Preserve an in-flight native click. Rebuilding the arranged views
+        // here used to release the pressed card before mouse-up.
+        guard interceptedPanelButton == nil else { return }
         guard let bundleIdentifier = currentBundleIdentifier,
-              Date().timeIntervalSince(lastPanelRefresh) >= 0.75 else { return }
+              forceRefresh || Date().timeIntervalSince(lastPanelRefresh) >= 0.45 else { return }
         let windows = store.dockPreviewWindows(bundleIdentifier: bundleIdentifier)
-        let signatures = windows.map(windowSignature)
+        let application = windows.isEmpty && isKnownWindowless(bundleIdentifier: bundleIdentifier)
+            ? runningApplication(bundleIdentifier: bundleIdentifier)
+            : nil
+        guard !windows.isEmpty || application != nil else {
+            hidePanel()
+            return
+        }
+        let signatures = windows.isEmpty
+            ? ["empty:\(application?.processIdentifier ?? 0)"]
+            : windows.map(windowSignature)
         if signatures != visibleWindowSignatures {
             showPanel(for: bundleIdentifier, dockFrame: currentDockFrame)
         } else {
-            refreshPreviews(for: windows)
+            // Restoring focus after a background close can reorder windows from
+            // another process above this nonactivating panel. Reassert its menu
+            // level without activating WarpTab so the visible cards remain the
+            // actual click target.
+            window?.orderFrontRegardless()
+            refreshPreviews(for: windows, forceRefresh: true)
             lastPanelRefresh = Date()
         }
     }
 
-    private func refreshPreviews(for windows: [WarpWindow]) {
+    private func refreshPreviews(for windows: [WarpWindow], forceRefresh: Bool) {
+        // The stack can contain many windows, but the scroller displays only a
+        // handful. Capture the visible cards plus one card of prefetch on each
+        // side so large-window apps do not continuously allocate screenshots
+        // that the user cannot see.
+        let prefetchWidth = PreviewMetrics.forSize(preferences.dockPreviewSize).cardWidth + stack.spacing
+        let captureRect = scrollView.documentVisibleRect.insetBy(dx: -prefetchWidth, dy: 0)
         for item in windows {
-            let image = previewCache.image(for: item, forceRefresh: true) { [weak self] identity, image in
+            guard let card = cards[item.identity], card.frame.intersects(captureRect) else { continue }
+            let image = previewCache.image(for: item, forceRefresh: forceRefresh) { [weak self] identity, image in
                 self?.cards[identity]?.updatePreview(image)
             }
-            if let image { cards[item.identity]?.updatePreview(image) }
+            if let image { card.updatePreview(image) }
         }
     }
 
     private func showPanel(for bundleIdentifier: String, dockFrame: CGRect) {
+        guard preferences.dockPreviewsEnabled else {
+            hidePanel()
+            return
+        }
         let windows = store.dockPreviewWindows(bundleIdentifier: bundleIdentifier)
-        guard !windows.isEmpty, let panel = window else {
+        let emptyApplication = windows.isEmpty && isKnownWindowless(bundleIdentifier: bundleIdentifier)
+            ? runningApplication(bundleIdentifier: bundleIdentifier)
+            : nil
+        guard (!windows.isEmpty || emptyApplication != nil), let panel = window else {
             hidePanel(clearCandidate: false)
             return
         }
@@ -444,46 +592,73 @@ final class DockPreviewController: NSWindowController {
 
         let metrics = PreviewMetrics.forSize(preferences.dockPreviewSize)
         let cardLayouts = windows.map(metrics.cardLayout)
-        for (item, layout) in zip(windows, cardLayouts) {
-            let card = DockPreviewCard(
-                window: item,
-                layout: layout,
-                showsCloseButton: preferences.dockPreviewCloseEnabled,
-                onClick: { [weak self] in self?.activate(item) },
-                onClose: { [weak self] in self?.close(item) }
-            )
-            cards[item.identity] = card
-            stack.addArrangedSubview(card)
-            let image = previewCache.image(for: item, forceRefresh: true) { [weak self] identity, image in
-                self?.cards[identity]?.updatePreview(image)
+        if let emptyApplication {
+            let card = DockEmptyPreviewCard(application: emptyApplication) { [weak self, weak emptyApplication] in
+                self?.hidePanel()
+                emptyApplication?.activate(options: [.activateIgnoringOtherApps])
             }
-            card.updatePreview(image)
+            stack.addArrangedSubview(card)
+        } else {
+            for (item, layout) in zip(windows, cardLayouts) {
+                let card = DockPreviewCard(
+                    window: item,
+                    layout: layout,
+                    showsCloseButton: preferences.dockPreviewCloseEnabled,
+                    onClick: { [weak self] in self?.activate(item) },
+                    onClose: { [weak self] in self?.close(item) }
+                )
+                cards[item.identity] = card
+                stack.addArrangedSubview(card)
+            }
         }
 
         let screen = NSScreen.screens.first { $0.frame.intersects(dockFrame) }
             ?? NSScreen.warpHardwareMain
         guard let screen else { return }
-        let naturalWidth = cardLayouts.reduce(0) { $0 + $1.cardWidth }
-            + CGFloat(max(0, windows.count - 1)) * stack.spacing + 20
-        let minimumWidth = (cardLayouts.first?.cardWidth ?? metrics.cardWidth) + 20
+        let naturalWidth = emptyApplication == nil
+            ? cardLayouts.reduce(0) { $0 + $1.cardWidth }
+                + CGFloat(max(0, windows.count - 1)) * stack.spacing + 20
+            : 210
+        let minimumWidth = emptyApplication == nil
+            ? (cardLayouts.first?.cardWidth ?? metrics.cardWidth) + 20
+            : 210
         let width = min(max(minimumWidth, naturalWidth), screen.visibleFrame.width - 24)
-        stackHeightConstraint.constant = metrics.panelHeight - 10
-        panel.setContentSize(NSSize(width: width, height: metrics.panelHeight))
+        let panelHeight = emptyApplication == nil ? metrics.panelHeight : CGFloat(112)
+        stackHeightConstraint.constant = panelHeight - 10
+        panel.setContentSize(NSSize(width: width, height: panelHeight))
         panel.setFrameOrigin(panelOrigin(size: panel.frame.size, dockFrame: dockFrame, screen: screen))
         panel.orderFrontRegardless()
         panel.contentView?.layoutSubtreeIfNeeded()
+        if !windows.isEmpty {
+            refreshPreviews(for: windows, forceRefresh: true)
+        }
         currentBundleIdentifier = bundleIdentifier
         currentDockFrame = dockFrame
-        visibleWindowSignatures = windows.map(windowSignature)
+        visibleWindowSignatures = windows.isEmpty
+            ? ["empty:\(emptyApplication?.processIdentifier ?? 0)"]
+            : windows.map(windowSignature)
         lastPanelRefresh = Date()
     }
 
+    private func runningApplication(bundleIdentifier: String) -> NSRunningApplication? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .first { !$0.isTerminated && $0.activationPolicy == .regular }
+    }
+
+    private func isKnownWindowless(bundleIdentifier: String) -> Bool {
+        store.allWindows().contains {
+            $0.bundleIdentifier == bundleIdentifier && $0.isWindowlessApplication
+        }
+    }
+
     private func activate(_ item: WarpWindow) {
+        let target = latestWindow(matching: item)
         hidePanel()
-        store.commit(item)
+        store.commit(target)
     }
 
     private func close(_ item: WarpWindow) {
+        let item = latestWindow(matching: item)
         let bundleIdentifier = item.bundleIdentifier
         let processIdentifier = item.application.processIdentifier
         let previousFocus = store.activator.captureFocus()
@@ -515,8 +690,11 @@ final class DockPreviewController: NSWindowController {
             guard let self else { return }
             store.requestRefresh(immediate: true)
             if currentBundleIdentifier == bundleIdentifier,
-               let bundleIdentifier {
-                showPanel(for: bundleIdentifier, dockFrame: currentDockFrame)
+               bundleIdentifier != nil {
+                // The observer-driven store refresh may already have rebuilt
+                // the cards. Avoid replacing the view hierarchy between a
+                // user's mouse-down and mouse-up on the next preview.
+                refreshVisiblePanelIfNeeded(forceRefresh: true)
             }
         }
 
@@ -528,6 +706,42 @@ final class DockPreviewController: NSWindowController {
             application.terminate()
             hidePanel()
         }
+    }
+
+    private func latestWindow(matching item: WarpWindow) -> WarpWindow {
+        guard let bundleIdentifier = item.bundleIdentifier else { return item }
+        let candidates = store.dockPreviewWindows(bundleIdentifier: bundleIdentifier)
+            .filter { $0.application.processIdentifier == item.application.processIdentifier }
+        if let exact = candidates.first(where: { $0.identity == item.identity }) { return exact }
+
+        // A WindowServer id is stronger than a title. Browsers, Finder and
+        // document apps routinely expose several blank or identical titles;
+        // selecting the first title match can therefore open a sibling card.
+        if let windowID = item.windowID {
+            let matchingID = candidates.filter { $0.windowID == windowID }
+            if matchingID.count == 1, let match = matchingID.first { return match }
+        }
+        let expectedTitle = item.rawTitle ?? ""
+        let matchingTitles = candidates.filter {
+            ($0.rawTitle ?? "") == expectedTitle && ($0.axTab != nil) == (item.axTab != nil)
+        }
+        if matchingTitles.count == 1, let match = matchingTitles.first { return match }
+        return item
+    }
+
+    private func panelButton(at appKitPoint: CGPoint) -> DockPressButton? {
+        guard let panel = window,
+              panel.isVisible,
+              panel.frame.contains(appKitPoint),
+              let content = panel.contentView else { return nil }
+        let windowPoint = panel.convertPoint(fromScreen: appKitPoint)
+        let contentPoint = content.convert(windowPoint, from: nil)
+        return content.hitTest(contentPoint) as? DockPressButton
+    }
+
+    private func buttonFrameOnScreen(_ button: DockPressButton) -> CGRect? {
+        guard let panel = window, button.window === panel else { return nil }
+        return panel.convertToScreen(button.convert(button.bounds, to: nil))
     }
 
     private func hasOpenWindows(_ application: NSRunningApplication) -> Bool {
@@ -542,6 +756,10 @@ final class DockPreviewController: NSWindowController {
     }
 
     private func hidePanel(clearCandidate: Bool = true) {
+        guard window?.isVisible == true || currentBundleIdentifier != nil || !cards.isEmpty else {
+            if clearCandidate { candidateBundleIdentifier = nil }
+            return
+        }
         window?.orderOut(nil)
         stack.arrangedSubviews.forEach {
             stack.removeArrangedSubview($0)
@@ -608,8 +826,34 @@ final class DockPreviewController: NSWindowController {
         guard Date().timeIntervalSince(lastDockListRefresh) >= 0.5 else { return nil }
         dockList = nil
         lastDockListRefresh = Date()
-        guard let refreshedList = dockListElement() else { return nil }
-        return dockHit(at: point, in: refreshedList)
+        if let refreshedList = dockListElement(), let hit = dockHit(at: point, in: refreshedList) {
+            return hit
+        }
+
+        // Full-screen and auto-hidden Dock layouts do not always expose the
+        // application items as direct children of the first AXList. Use a
+        // bounded hierarchy fallback only when the fast path misses.
+        guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else {
+            return nil
+        }
+        let application = AXUIElementCreateApplication(dock.processIdentifier)
+        AXUIElementSetMessagingTimeout(application, 0.08)
+        return dockHit(at: point, inHierarchy: application, depth: 0)
+    }
+
+    private func dockHit(at point: CGPoint, inHierarchy element: AXUIElement, depth: Int) -> DockHit? {
+        guard depth < 7 else { return nil }
+        if attribute(element, kAXSubroleAttribute) as? String == "AXApplicationDockItem",
+           let frame = accessibilityFrame(of: element),
+           frame.insetBy(dx: -3, dy: -3).contains(point),
+           let bundleIdentifier = bundleIdentifier(for: element),
+           bundleIdentifier != Bundle.main.bundleIdentifier {
+            return DockHit(bundleIdentifier: bundleIdentifier, appKitFrame: appKitFrame(fromAccessibilityFrame: frame))
+        }
+        for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+            if let hit = dockHit(at: point, inHierarchy: child, depth: depth + 1) { return hit }
+        }
+        return nil
     }
 
     private func dockHit(at point: CGPoint, in list: AXUIElement) -> DockHit? {
@@ -657,8 +901,8 @@ final class DockPreviewController: NSWindowController {
     }
 
     private func accessibilityFrame(of element: AXUIElement) -> CGRect? {
-        guard let positionValue = attribute(element, kAXPositionAttribute).map({ $0 as! AXValue }),
-              let sizeValue = attribute(element, kAXSizeAttribute).map({ $0 as! AXValue }) else { return nil }
+        guard let positionValue = warpAXValue(attribute(element, kAXPositionAttribute)),
+              let sizeValue = warpAXValue(attribute(element, kAXSizeAttribute)) else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
         guard AXValueGetValue(positionValue, .cgPoint, &position),
@@ -678,12 +922,73 @@ final class DockPreviewController: NSWindowController {
     }
 }
 
+private final class DockEmptyPreviewCard: NSView {
+    init(application: NSRunningApplication, onClick: @escaping () -> Void) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
+        layer?.cornerRadius = 10
+        layer?.cornerCurve = .continuous
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Open \(application.localizedName ?? "application")")
+
+        let clickButton = DockPressButton(action: onClick)
+        clickButton.isBordered = false
+        clickButton.title = ""
+        clickButton.focusRingType = .none
+        clickButton.translatesAutoresizingMaskIntoConstraints = false
+        clickButton.setAccessibilityElement(false)
+
+        let icon = DockDecorationImageView(image: application.icon ?? AppIcon.make())
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = DockDecorationTextField(labelWithString: application.localizedName ?? "Application")
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        title.lineBreakMode = .byTruncatingTail
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let message = DockDecorationTextField(labelWithString: "No window open")
+        message.font = .systemFont(ofSize: 11, weight: .regular)
+        message.textColor = .secondaryLabelColor
+        message.translatesAutoresizingMaskIntoConstraints = false
+
+        let labels = NSStackView(views: [title, message])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 2
+        labels.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(clickButton)
+        addSubview(icon)
+        addSubview(labels)
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 190),
+            heightAnchor.constraint(equalToConstant: 92),
+            clickButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            clickButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            clickButton.topAnchor.constraint(equalTo: topAnchor),
+            clickButton.bottomAnchor.constraint(equalTo: bottomAnchor),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 42),
+            icon.heightAnchor.constraint(equalToConstant: 42),
+            labels.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
+            labels.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            labels.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
 private final class DockPreviewCard: NSView {
-    private let imageView = NSImageView()
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let iconView = NSImageView()
-    private let fallbackIcon = NSImageView()
-    private let onClick: () -> Void
+    private let imageView = DockDecorationImageView()
+    private let titleLabel = DockDecorationTextField(labelWithString: "")
+    private let iconView = DockDecorationImageView()
+    private let fallbackIcon = DockDecorationImageView()
     private var trackingArea: NSTrackingArea?
 
     init(
@@ -693,7 +998,6 @@ private final class DockPreviewCard: NSView {
         onClick: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
-        self.onClick = onClick
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
@@ -724,6 +1028,14 @@ private final class DockPreviewCard: NSView {
         titleLabel.maximumNumberOfLines = 1
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        let clickButton = DockPressButton(action: onClick)
+        clickButton.isBordered = false
+        clickButton.title = ""
+        clickButton.focusRingType = .none
+        clickButton.translatesAutoresizingMaskIntoConstraints = false
+        clickButton.setAccessibilityElement(false)
+
+        addSubview(clickButton)
         addSubview(imageView)
         addSubview(iconView)
         addSubview(titleLabel)
@@ -733,6 +1045,10 @@ private final class DockPreviewCard: NSView {
         var constraints = [
             widthAnchor.constraint(equalToConstant: layout.cardWidth),
             heightAnchor.constraint(equalToConstant: layout.cardHeight),
+            clickButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            clickButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            clickButton.topAnchor.constraint(equalTo: topAnchor),
+            clickButton.bottomAnchor.constraint(equalTo: bottomAnchor),
             imageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             imageView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             imageView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
@@ -778,11 +1094,8 @@ private final class DockPreviewCard: NSView {
         layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
     }
 
-    override func mouseUp(with event: NSEvent) { onClick() }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
     private func makeCloseButton(window: WarpWindow, action: @escaping () -> Void) -> NSButton {
-        let button = CallbackButton(action: action)
+        let button = DockPressButton(action: action)
         button.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close window")
         button.imageScaling = .scaleProportionallyUpOrDown
         button.isBordered = false
@@ -799,19 +1112,29 @@ private final class DockPreviewCard: NSView {
     }
 }
 
-private final class CallbackButton: NSButton {
+private final class DockDecorationImageView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class DockDecorationTextField: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class DockPressButton: NSButton {
     private let callback: () -> Void
 
     init(action: @escaping () -> Void) {
         callback = action
         super.init(frame: .zero)
         target = self
-        self.action = #selector(performCallback)
+        self.action = #selector(invokeNativePress(_:))
     }
 
     required init?(coder: NSCoder) { nil }
 
-    @objc private func performCallback() { callback() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    @objc private func invokeNativePress(_ sender: Any?) { performPress() }
+    func performPress() { callback() }
 }
 
 private func warpTabDockMouseEventCallback(

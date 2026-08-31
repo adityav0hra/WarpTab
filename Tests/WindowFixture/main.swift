@@ -6,6 +6,11 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
+        if CommandLine.arguments.contains("--no-window") {
+            // Remain running as a regular Dock application without creating a
+            // window so WarpTab's empty-preview state can be verified.
+            return
+        }
         if CommandLine.arguments.contains("--size-transition") {
             let small = makeWindow(title: "WarpTab Small Window", origin: NSPoint(x: 120, y: 560))
             small.setContentSize(NSSize(width: 300, height: 220))
@@ -44,6 +49,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
                 queue: .main
             ) { [weak window] _ in
                 window?.contentView?.layer?.backgroundColor = NSColor.systemGreen.cgColor
+                window?.title = "WarpTab Live Preview Updated"
             }
             window.makeKeyAndOrderFront(nil)
             NSApplication.shared.activate(ignoringOtherApps: true)

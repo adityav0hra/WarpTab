@@ -214,8 +214,8 @@ final class CoreAudioService {
         guard AudioObjectHasProperty(object, &address) else { return nil }
         var value = initial
         var size = UInt32(MemoryLayout<T>.size)
-        let status = withUnsafeMutableBytes(of: &value) { bytes in
-            AudioObjectGetPropertyData(object, &address, 0, nil, &size, bytes.baseAddress!)
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(object, &address, 0, nil, &size, pointer)
         }
         return status == noErr ? value : nil
     }
@@ -226,9 +226,11 @@ final class CoreAudioService {
         let sizeStatus = AudioObjectGetPropertyDataSize(object, &address, 0, nil, &size)
         guard sizeStatus == noErr else { throw AudioServiceError.coreAudio(sizeStatus) }
         let count = Int(size) / MemoryLayout<AudioObjectID>.size
+        guard count > 0 else { return [] }
         var values = Array(repeating: AudioObjectID(kAudioObjectUnknown), count: count)
-        let status = values.withUnsafeMutableBytes { bytes in
-            AudioObjectGetPropertyData(object, &address, 0, nil, &size, bytes.baseAddress!)
+        let status = values.withUnsafeMutableBytes { bytes -> OSStatus in
+            guard let baseAddress = bytes.baseAddress else { return OSStatus(-50) }
+            return AudioObjectGetPropertyData(object, &address, 0, nil, &size, baseAddress)
         }
         guard status == noErr else { throw AudioServiceError.coreAudio(status) }
         return values

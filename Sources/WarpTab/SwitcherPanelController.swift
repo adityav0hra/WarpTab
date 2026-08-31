@@ -30,12 +30,14 @@ enum SelectedWindowAction {
 final class SwitcherPanelController: NSWindowController {
     private let store: WindowStore
     private let previewCache: PreviewCache
+    private let preferences: WarpPreferences
     private var windows: [WarpWindow] = []
     private var unfilteredWindows: [WarpWindow] = []
     private var rows: [WindowRowView] = []
+    private var renderedIndices: [Int] = []
     private var selectedIndex = 0
     private let stack = FlippedStackView()
-    private let scrollView = NSScrollView()
+    private let scrollView = SwitcherScrollView()
     private let searchContainer = NSView()
     private let searchLabel = NSTextField(labelWithString: "")
     private var searchText = ""
@@ -47,12 +49,14 @@ final class SwitcherPanelController: NSWindowController {
         store: WindowStore,
         shortcut: SwitcherShortcut,
         layout: SwitcherLayout,
-        previewCache: PreviewCache = PreviewCache()
+        previewCache: PreviewCache = PreviewCache(),
+        preferences: WarpPreferences
     ) {
         self.store = store
         self.shortcut = shortcut
         self.layout = layout
         self.previewCache = previewCache
+        self.preferences = preferences
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 510, height: 360),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -71,6 +75,10 @@ final class SwitcherPanelController: NSWindowController {
 
     func updateShortcut(_ shortcut: SwitcherShortcut) {
         self.shortcut = shortcut
+    }
+
+    func updateAnimationsEnabled(_ enabled: Bool) {
+        window?.animationBehavior = enabled ? .utilityWindow : .none
     }
 
     func updateLayout(_ layout: SwitcherLayout) {
@@ -175,7 +183,7 @@ final class SwitcherPanelController: NSWindowController {
         panel.isMovable = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.ignoresMouseEvents = false
-        panel.animationBehavior = .utilityWindow
+        panel.animationBehavior = preferences.animationsEnabled ? .utilityWindow : .none
 
         let effect = NSVisualEffectView()
         effect.material = .hudWindow
@@ -228,6 +236,7 @@ final class SwitcherPanelController: NSWindowController {
         scrollView.hasVerticalScroller = true
         scrollView.scrollerStyle = .overlay
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.onNavigate = { [weak self] navigation in self?.navigate(navigation) }
 
         let contentStack = NSStackView(views: [searchContainer, scrollView])
         contentStack.orientation = .vertical
@@ -246,7 +255,9 @@ final class SwitcherPanelController: NSWindowController {
 
     private func rebuildRows() {
         stack.arrangedSubviews.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() }
-        rows = windows.enumerated().map { index, item in
+        renderedIndices = desiredRenderedIndices()
+        rows = renderedIndices.map { index in
+            let item = windows[index]
             let row = WindowRowView(
                 window: item,
                 number: index + 1,
@@ -352,15 +363,35 @@ final class SwitcherPanelController: NSWindowController {
     private func refreshThumbnail(identity: String, image: NSImage?) {
         guard isVisible,
               let index = windows.firstIndex(where: { $0.identity == identity }),
-              rows.indices.contains(index) else { return }
-        rows[index].updateThumbnail(image)
+              let renderedIndex = renderedIndices.firstIndex(of: index),
+              rows.indices.contains(renderedIndex) else { return }
+        rows[renderedIndex].updateThumbnail(image)
     }
 
     private func updateSelection(scrollSelectedIntoView: Bool = true) {
-        for (index, row) in rows.enumerated() { row.isSelected = index == selectedIndex }
-        if scrollSelectedIntoView, rows.indices.contains(selectedIndex) {
-            rows[selectedIndex].scrollToVisible(rows[selectedIndex].bounds)
+        if !windows.isEmpty, !renderedIndices.contains(selectedIndex) {
+            rebuildRows()
+            return
         }
+        for (renderedIndex, row) in rows.enumerated() {
+            row.isSelected = renderedIndices[renderedIndex] == selectedIndex
+        }
+        if scrollSelectedIntoView,
+           let renderedIndex = renderedIndices.firstIndex(of: selectedIndex),
+           rows.indices.contains(renderedIndex) {
+            rows[renderedIndex].scrollToVisible(rows[renderedIndex].bounds)
+        }
+    }
+
+    private func desiredRenderedIndices() -> [Int] {
+        guard !windows.isEmpty else { return [] }
+        // The model always retains every window. Limit only the layer-backed
+        // AppKit rows so large collections open as quickly as small ones.
+        let limit = 12
+        guard windows.count > limit else { return Array(windows.indices) }
+        var start = min(max(0, selectedIndex - limit / 2), windows.count - limit)
+        if layout == .thumbnails { start -= start % 4 }
+        return Array(start..<min(start + limit, windows.count))
     }
 
     private func showPanel(resetScrollPosition: Bool = false) {
@@ -406,6 +437,22 @@ final class SwitcherPanelController: NSWindowController {
 
 private final class SwitcherDocumentView: NSView {
     override var isFlipped: Bool { true }
+}
+
+private final class SwitcherScrollView: NSScrollView {
+    var onNavigate: ((SwitcherNavigation) -> Void)?
+    private var lastNavigationDate = Date.distantPast
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let onNavigate, abs(event.scrollingDeltaY) > 0.01 else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let minimumInterval = event.hasPreciseScrollingDeltas ? 0.045 : 0.02
+        guard Date().timeIntervalSince(lastNavigationDate) >= minimumInterval else { return }
+        lastNavigationDate = Date()
+        onNavigate(event.scrollingDeltaY > 0 ? .previous : .next)
+    }
 }
 
 private final class FlippedStackView: NSStackView {

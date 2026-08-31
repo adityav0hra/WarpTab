@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import CoreGraphics
 import Vision
 
@@ -197,6 +198,21 @@ private func warpTabOverlayWindow() -> CGWindowID? {
     }.max(by: { $0.1 < $1.1 })?.0
 }
 
+private func warpTabCompactOverlayWindow() -> CGWindowID? {
+    let windows = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+    ) as? [[String: Any]] ?? []
+    return windows.compactMap { info -> CGWindowID? in
+        guard (info[kCGWindowOwnerName as String] as? String) == "WarpTab",
+              let number = info[kCGWindowNumber as String] as? NSNumber,
+              let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
+              bounds.width >= 260, bounds.width < 1_000,
+              bounds.height >= 80, bounds.height < 750 else { return nil }
+        return CGWindowID(number.uint32Value)
+    }.first
+}
+
 private func visibleWindowOrder() -> [(owner: String, title: String, bounds: CGRect)] {
     let windows = CGWindowListCopyWindowInfo(
         [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
@@ -284,32 +300,71 @@ private func runTests() throws {
     try expect(AXIsProcessTrusted(), "Accessibility permission available to integration harness")
     try waitForFixtureWindows()
 
+    if CommandLine.arguments.contains("--modifier-isolation-only") ||
+        CommandLine.arguments.contains("--modifier-isolation-color-only") {
+        let testsColorPicker = CommandLine.arguments.contains("--modifier-isolation-color-only")
+        let shortcutKey = CGKeyCode(testsColorPicker ? kVK_ANSI_C : kVK_ANSI_T)
+        let shortcutName = testsColorPicker ? "C" : "T"
+        try activateFixtureAsFrontmost()
+        postKey(CGKeyCode(kVK_Control), down: true, flags: [.maskControl])
+        postKey(CGKeyCode(kVK_Option), down: true, flags: [.maskControl, .maskAlternate])
+        press(shortcutKey, flags: [.maskControl, .maskAlternate])
+        wait(0.35)
+        try expect(
+            warpTabCompactOverlayWindow() == nil,
+            "Control-Option-\(shortcutName) does not open the Option-\(shortcutName) window switcher"
+        )
+        postKey(CGKeyCode(kVK_Option), down: false, flags: [.maskControl])
+        postKey(CGKeyCode(kVK_Control), down: false, flags: [])
+        press(CGKeyCode(kVK_Escape), flags: [])
+        wait(0.25)
+
+        try activateFixtureAsFrontmost()
+        postKey(CGKeyCode(kVK_Option), down: true, flags: [.maskAlternate])
+        press(shortcutKey, flags: [.maskAlternate])
+        wait(0.35)
+        try expect(
+            warpTabCompactOverlayWindow() != nil,
+            "Option-\(shortcutName) still opens the configured window switcher"
+        )
+        press(CGKeyCode(kVK_Escape), flags: [])
+        postKey(CGKeyCode(kVK_Option), down: false, flags: [])
+        print("WarpTab shortcut modifier-isolation test passed: \(assertions) assertions")
+        return
+    }
+
     if CommandLine.arguments.contains("--focus-stability-only") {
         let application = try fixtureApplication()
+        let smallElement = try fixtureWindow(titled: "WarpTab Small Window")
         let largeElement = try fixtureWindow(titled: "WarpTab Large Window")
-        let candidate = WarpWindow(
-            identity: "focus-stability-large",
-            application: application,
-            axWindow: largeElement,
-            axTab: nil,
-            title: "WarpTab Large Window",
-            rawTitle: "WarpTab Large Window",
-            appName: "WarpTab Fixture",
-            bundleIdentifier: "com.warptab.fixture",
-            icon: application.icon ?? NSImage(),
-            windowID: nil,
-            bounds: .zero,
-            screenIdentifier: nil,
-            isFocused: false,
-            isMinimized: false,
-            isHidden: false,
-            isFullscreen: false,
-            isOnScreen: true,
-            isWindowlessApplication: false,
-            nativeTabCount: 1,
-            lastFocusedAt: nil
-        )
-        WindowActivator().activate(candidate)
+        func candidate(_ title: String, element: AXUIElement) -> WarpWindow {
+            WarpWindow(
+                identity: "focus-stability-\(title)",
+                application: application,
+                axWindow: element,
+                axTab: nil,
+                title: title,
+                rawTitle: title,
+                appName: "WarpTab Fixture",
+                bundleIdentifier: "com.warptab.fixture",
+                icon: application.icon ?? NSImage(),
+                windowID: nil,
+                bounds: .zero,
+                screenIdentifier: nil,
+                isFocused: false,
+                isMinimized: false,
+                isHidden: false,
+                isFullscreen: false,
+                isOnScreen: true,
+                isWindowlessApplication: false,
+                nativeTabCount: 1,
+                lastFocusedAt: nil
+            )
+        }
+        let activator = WindowActivator()
+        activator.activate(candidate("WarpTab Small Window", element: smallElement))
+        wait(0.03)
+        activator.activate(candidate("WarpTab Large Window", element: largeElement))
         let deadline = Date().addingTimeInterval(1.0)
         var observedLarge = false
         var originalReappeared = false
@@ -317,10 +372,10 @@ private func runTests() throws {
             let title = try focusedFixtureTitle()
             if title == "WarpTab Large Window" { observedLarge = true }
             if observedLarge, title == "WarpTab Small Window" { originalReappeared = true }
-            wait(0.01)
+            wait(0.005)
         } while Date() < deadline
         try expect(observedLarge, "The large destination window receives focus")
-        try expect(!originalReappeared, "The original small window never flashes back after switching")
+        try expect(!originalReappeared, "A superseded activation never flashes the original small window back")
         print("WarpTab focus-stability test passed: \(assertions) assertions")
         return
     }
